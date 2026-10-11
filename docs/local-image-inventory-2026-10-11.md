@@ -1,6 +1,6 @@
 # Local image inventory — 2026-10-11
 
-**Completed: one specifically approved obsolete node image removed; all Docker images preserved.** Initial health/recovery gates were outstanding; see the recovery follow-up below for the later parent-reported health pass and verified payload evidence. The initial inventory and recovery checkpoints below are historical; the final coordinated action is recorded at the end.
+**Bounded cleanup complete in both stores, with retained items. No cleanup operation remains running.** One specifically approved obsolete node image was removed; Docker removed none. Eight old Docker objects and three old node objects remain because exact original index recovery is unproved. All current/shared/system objects remain protected. Initial health/recovery gates and inventory checkpoints below are historical; the final coordinated action records actual removal and per-store allocation counters.
 
 Snapshot: 2026-10-11 05:56:12 UTC. Docker context `desktop-linux`; Kubernetes context `docker-desktop`; existing node container `desktop-control-plane`, ID `ba5c6a0bc09a679b59240d349082650c379abeab7813cd27e6928031550ba337`, image `kindest/node:v1.36.1`, Docker ID `sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5`. Node runtime is containerd; its only listed namespace is `k8s.io`.
 

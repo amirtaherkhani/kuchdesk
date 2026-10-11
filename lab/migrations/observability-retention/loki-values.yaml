@@ -1,0 +1,4 @@
+# CANDIDATE ONLY: irreversible expiry requires action-time approval.
+loki:
+  limits_config:
+    retention_period: 72h

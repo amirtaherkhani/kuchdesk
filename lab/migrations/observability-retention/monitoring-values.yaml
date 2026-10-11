@@ -1,0 +1,8 @@
+# CANDIDATE ONLY: both stores use emptyDir; rollout can lose ALL state.
+# Pair with post-renderer.rb to align availability records/dashboard to 3d.
+prometheus:
+  prometheusSpec:
+    retention: 3d
+alertmanager:
+  alertmanagerSpec:
+    retention: 72h

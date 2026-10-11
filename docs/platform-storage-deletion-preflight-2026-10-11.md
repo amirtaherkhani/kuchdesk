@@ -48,9 +48,9 @@ These paths are inside the Kubernetes node filesystem. They are not established 
 
 ## Runtime and manual-consumer limits
 
-Docker context was `desktop-linux`. `docker ps -a` returned no visible containers, while `docker info` reported five running containers. Therefore Docker CLI enumeration does **not** establish absence of internal Kubernetes/kind/Docker Desktop mounts. No speculative container was started to inspect them.
+At the initial inspection, Docker context was `desktop-linux`. `docker ps -a` returned no visible containers, while `docker info` reported five running containers. Therefore that CLI enumeration did **not** establish absence of internal Kubernetes/kind/Docker Desktop mounts. The later direct node check below improves this evidence. No speculative container was started.
 
-A read-only attempt to inspect mount-table metadata through the existing node-exporter mount could not run: its image has no `cat` executable. No new mount, helper Pod, image install or privileged debug container was created. Node process open-file tables, internal runtime mounts, stopped/hidden containers and the macOS-to-VM backing mapping remain unverified. No database files were opened. Offline/manual/external consumers cannot be ruled out.
+A read-only attempt through the existing node-exporter mount could not run: its image has no `cat` executable. The later direct node check below inspected available mount/open-file metadata and the Docker volume mapping; the macOS backing location remains unverified. No new mount, helper Pod, image install or privileged debug container was created. No database files were opened. Offline/manual/external consumers cannot be ruled out.
 
 The earlier [audit](platform-storage-audit-2026-10-10.md) is historical supporting context; fresh identities and observations are recorded above. No usable backup or successful restoration was established, and no backup was created.
 

@@ -1,6 +1,6 @@
 # Namespace migration preparation
 
-Prepared from read-only live metadata on 2026-10-10. The approved k6-only stage is now complete; all other mappings remain preparation. The current profile remains operational. See the [namespace architecture](namespace-proposal.md).
+Prepared from live metadata on 2026-10-10 and reverified on 2026-10-11. The approved k6 and agent stages are complete; the remaining mappings are preparation. The current profile remains operational. See the [namespace architecture](namespace-proposal.md).
 
 ## Current state
 
@@ -11,11 +11,11 @@ Prepared from read-only live metadata on 2026-10-10. The approved k6-only stage 
 
 ## Mapping recorded before the k6 stage
 
-Names below stay the same unless a separate reviewed plan says otherwise. Target namespace resources do not yet exist as a result of this work.
+Names below stay the same unless a separate reviewed plan says otherwise. This records the original mapping; k6 and the agent have since moved to their approved targets. Other target resources have not been created by this work.
 
 | Current objects / ownership | Intended namespace | Dependencies and gate |
 |---|---|---|
-| `development-tools`: Deployment, Service and ServiceAccount `kuchdesk-agent`; Helm release `kuchdesk-agent` | `platform-tools` | Secret references `kuchdesk-agent-auth`, `kuchdesk-host-bridge-token`; ConfigMap `kuchdesk-host-bridge-ca`; current ClusterRoleBinding `kuchdesk-agent-admin` binds this account to `cluster-admin`. Requires explicit security approval; do not copy/extend that binding automatically. |
+| Agent Deployment, Service and ServiceAccount `kuchdesk-agent` now in `platform-tools`; Helm record remains `development-tools` | Completed approved stage | Revision 7; original image/config/RBAC rules preserved. Two existing Secrets/public CA copied, source copies retained. See the scoped renderer workflow below. |
 | `observability-tests`: Deployment `k6-operator-controller-manager`, Service `k6-operator-controller-manager-metrics-service`, ServiceAccount `k6-operator-controller`; Helm release `k6-operator` | `platform-tests` | Role/RoleBinding `k6-operator-leader-election-role` / `k6-operator-leader-election-rolebinding`; ClusterRoleBindings `k6-operator-manager-rolebinding`, `k6-operator-metrics-auth-rolebinding`; metrics discovery and test manifests. Requires approval of exact new subjects, with no broader rules. |
 | `platform-system`: Deployment/Service/ServiceAccount `traefik`; manually managed Service `traefik-lan`; Helm release `traefik` | `platform-networking` | ClusterRoleBinding `traefik-platform-system`, ingress class/provider scope, LAN ports, TLSStore and certificate Secret references. Preserve existing traffic until replacement routing passes checks. |
 | `platform-system`: Deployments/Services/ServiceAccounts `cert-manager`, `cert-manager-cainjector`, `cert-manager-webhook`; Helm release `cert-manager` | `platform-networking` | ClusterRoleBinding subjects, webhook Service namespace and CA trust, leader election, cluster-resource namespace and private CA. Move only in an explicitly approved PKI/security plan. |
@@ -64,7 +64,7 @@ Do not switch the checked-in active profile piecemeal before these dependencies 
 5. **Health gates:** compare ready replicas and endpoints; Doctor 8/8 with two enrolled projects; authenticated agent API/metrics; k6 controller and metrics target; DNS wildcard and recursive resolution; ingress HTTPS and certificate readiness; Grafana auth sync; positive reader login/read plus denied write and denied unrelated-account login. Verify registry image pull without introducing test credentials or changing data.
 6. **Rollback:** record original release revisions, non-secret configuration, routing/Service references and RBAC subjects before cutover. Keep originals until checks pass. On failure, restore the approved original release/subjects/references and traffic endpoint; re-run the same health checks. A Helm rollback alone does not restore moved data or external Infisical auth configuration. Do not delete target or source data as an automatic rollback step.
 
-The approved k6-only stage completed in 11.8 seconds, Helm revision 2 retained in observability-tests. Workloads and metrics are ready in platform-tests; Doctor passed 8/8. CRDs, ClusterRole rules and all ten retained PVCs were preserved. No rollback was needed. See the [stage workflow](../lab/migrations/k6-platform-tests/README.md). All other migrations remain pending their individual gates.
+The approved k6 stage completed in 11.8 seconds, Helm revision 2 retained in observability-tests. Workloads and metrics are ready in platform-tests; Doctor passed 8/8. CRDs, ClusterRole rules and all ten retained PVCs were preserved. No rollback was needed. See the [stage workflow](../lab/migrations/k6-platform-tests/README.md). The agent stage also completed, as recorded below; the remaining migrations await their individual gates.
 
 ## Repository Helm inventory
 
@@ -92,11 +92,11 @@ The upstream release commands and pinned versions are recorded in `lab/README.md
 
 Operational backup defaults are [native local exports without an added encrypted container](backup-defaults.md), outside Git with restrictive permissions and restoration checks. No backup was created for the k6 move. Infisical upgrade work is paused; see the [storage audit and checkpoint](platform-storage-audit-2026-10-10.md).
 
-## Next approval bundle: stateless KuchDesk agent
+## Approved scope: stateless KuchDesk agent
 
-Prepared, not applied. Fresh inspection confirms release `kuchdesk-agent` revision **6**, chart **0.13.0**, source Deployment 1/1 ready and target namespace `platform-tools` absent.
+The original preflight found release `kuchdesk-agent` revision **6**, chart **0.13.0**, source Deployment 1/1 ready and target namespace absent. The exact scope below was approved and subsequently applied; the execution checkpoint records current verification.
 
-Proposed smallest remaining stage:
+Approved stage scope:
 
 - Create `platform-tools`; move Deployment, Service and ServiceAccount `kuchdesk-agent` from `development-tools`, retaining the same image, configuration and names. Keep the Helm release record in `development-tools` using a reviewed namespace post-renderer, as with k6.
 - Copy existing Secrets `kuchdesk-agent-auth` and `kuchdesk-host-bridge-token` to the target namespace through an in-memory private workflow; reuse their existing data without printing, rotating or placing it in Git. Retain the source copies for rollback. Copy ConfigMap `kuchdesk-host-bridge-ca`, which contains the public trust certificate. No private key, certificate issuance, CA/Issuer or Infisical identity change is included.
@@ -107,15 +107,33 @@ Expect a brief interruption to the agent API/SSE stream, followed by reconnect. 
 
 Health gates: target 1/1 Ready, `/healthz` and `/readyz`, authenticated cluster snapshot and SSE reconnect, Host bridge/Infisical metadata reads, Doctor 8/8, unchanged CoreDNS configuration, and unchanged Infisical/K8 permissions. Allow five minutes for readiness. On failure, roll Helm back to revision **6** in `development-tools`, restore the original two RBAC subjects and client references, and verify source readiness/health. Preserve the old namespace and Secret copies; no automatic data cleanup.
 
-Offline manifest comparison prepared from the exact current release changes only the three resource namespace fields and two RBAC subjects; the CoreDNS Role remains identical. Secret values were not read for preparation. The target Secret/ConfigMap copies and live security changes require the specific approval above. No gated action has been executed.
+Offline manifest comparison prepared from the exact current release changes only the three resource namespace fields and two RBAC subjects; the CoreDNS Role remains identical. Secret values were not read for preparation. The target Secret/ConfigMap copies and two subject changes were executed under the specific approval above; the user also expressly accepted interruption of potentially active operations.
 
-## Agent stage execution checkpoint: idle gate blocked
+## Historical idle gate and its resolution
 
 The exact agent move was subsequently approved, including the two Secret copies and two RBAC subject changes. Execution preflight rechecked context `docker-desktop`, release revision **6** with status `deployed`, source Deployment **1/1**, and absence of `platform-tools`. No live mutation followed.
 
 The required idle-operation gate could not be established. The last 15 minutes of agent logs contained no entries, but this is insufficient: exec and port-forward audit logging happens only when handlers return; asynchronous jobs log when execution starts, leaving queued work silent. The API exposes status only for a known job ID, with no global active/queued-operation inventory or admission/drain control. Source review independently confirmed the gap. Time limits and quiet logs do not prove that current operations are absent.
 
-The healthy source agent remains running. No namespace, credential copy, RBAC change, endpoint change or Helm revision was applied; the five-minute rollback gate was not entered. Proceed only after establishing quiescence through a reviewed mechanism, or after explicit acceptance of potentially interrupting active operations. That acceptance was not included in the approved idle-check condition. Infisical upgrade remains paused and retained PVCs remain excluded.
+The healthy source agent remains running. No namespace, credential copy, RBAC change, endpoint change or Helm revision was applied; the five-minute rollback gate was not entered. The user then explicitly accepted interruption of potentially active exec/tunnel/queued operations. This resolved the idle gate without adding a drain endpoint or expanding migration scope. Infisical upgrade remains paused and retained PVCs remain excluded.
+
+## Agent stage completed and reverified
+
+The approved move completed on 2026-10-10; target readiness took **6.4 seconds**, within the five-minute gate, and rollback was not needed. Fresh 2026-10-11 inspection confirms Helm revision **7** deployed with metadata in `development-tools`, target Deployment **1/1**, and no source Deployment/Service/ServiceAccount. Stored revision 6 transformed by the maintained renderer exactly equals revision 7: only three resource namespaces and two binding subject namespaces differ. Image, environment and RBAC rules are identical. Source and target copies of both Secrets and the public CA match in memory; no credential values were printed or placed in Git. The Infisical reader identity remains in `development-tools`.
+
+After starting the existing Docker Desktop engine, the node became Ready. Initial enrollment checks returned `project_denied` and Doctor 7/8 with a warning; the existing controller recovered as runtime startup settled. Fresh final checks pass API health/readiness, bearer authentication and denied unauthenticated access, snapshot, SSE connect/reconnect, metrics API, in-cluster Service DNS/ClusterIP health, two-project Host bridge metadata reads and Doctor **8/8**, enrollment `ready`. No login, grant or identity change was needed. The ten retained storage claims remain Bound with the identities documented in the [fresh deletion preflight](platform-storage-deletion-preflight-2026-10-11.md).
+
+Follow the [agent renderer workflow](../lab/migrations/agent-platform-tools/README.md) for future upgrades: workload namespace `platform-tools`, Helm metadata `development-tools`. The generic Host deploy workflow currently lacks the required post-renderer and separate target rollout namespace, so ordinary use on this migrated release would revert the move. Helm chart NOTES likewise report the release namespace and are not the current Service DNS.
+
+## Remaining namespace dependencies
+
+The k6 and agent stages are complete. Remaining moves need their own resource/ownership plan and applicable approval; no further live stage is started:
+
+- Traefik/cert-manager to `platform-networking`: map Helm records, cluster-resource ownership, admission webhooks, Service routing and certificate issuers/consumers before any cutover. This is a networking/PKI gate, not a routine namespace edit.
+- Technitium to `platform-networking`: map its bound data, service/admin endpoint, Host LaunchAgent namespace and private Secret references. DNS continuity and storage recovery require a separate approved handover.
+- Registry to `platform-tools`: map the active bound registry claim and the second retained registry claim's owner, image recovery dependencies and the localhost/node pull path. Neither registry claim belongs to the ten-claim deletion set.
+
+Retain source namespaces and old certificate deliveries until their actual consumers are reviewed. Observability and Infisical stay in their existing functional namespaces. Shared databases/brokers remain designs, with no new identity, grant, credential, network, PKI or storage rollout implied. Infisical upgrade and SDK work remain deferred.
 
 ## Verification-helper preservation
 

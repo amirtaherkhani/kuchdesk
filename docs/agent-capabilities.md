@@ -4,7 +4,7 @@ This is a capability and deployment inventory, not a grant of cluster-admin, hos
 
 ## Kubernetes agent
 
-The chart is installed as `development-tools/kuchdesk-agent` on the checked Docker Desktop KIND cluster. The local values explicitly enable management and CoreDNS APIs and bind its dedicated ServiceAccount to `cluster-admin`; chart defaults remain read-only for other installations. The release is 1/1 Ready behind a ClusterIP Service, with the existing bearer Secret retained. CoreDNS's `Corefile` remains unchanged.
+The workload runs as `platform-tools/kuchdesk-agent`; Helm release metadata remains `development-tools/kuchdesk-agent`. Fresh 2026-10-11 verification confirms revision 7 deployed and target 1/1 Ready, with the existing image/configuration and cluster-admin/CoreDNS permission rules preserved. Source bearer and Host bridge Secret copies remain. API, authentication, SSE, service DNS and metrics checks pass. Final Host bridge metadata reads return both projects and Doctor passes 8/8 with enrollment `ready`; an initial startup warning recovered through the existing controller. Older capability counts below remain historical evidence. See the [migration workflow](../lab/migrations/agent-platform-tools/README.md).
 
 | Capability | Requirement | Source status | Runtime / gap |
 | --- | --- | --- | --- |

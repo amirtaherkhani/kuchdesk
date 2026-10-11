@@ -152,3 +152,5 @@ go -C lab test ./...
 ```
 
 Tests use mocks, temporary resources and contract fixtures where appropriate. Passing them does not replace live acceptance checks for credentials, RBAC, storage, network reachability or rollout health.
+
+Deployment completion follows the project [local image retention rule](AGENTS.md) and [verification checklist](docs/deployment-completion.md).

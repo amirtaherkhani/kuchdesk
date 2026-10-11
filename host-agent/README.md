@@ -43,7 +43,7 @@ go run ./cmd/kuchdesk-doctor \
   -kube-context docker-desktop \
   -registry-url http://127.0.0.1:5001 \
   -disk-path /absolute/path/to/project \
-  -service development-tools/kuchdesk-agent \
+  -service platform-tools/kuchdesk-agent \
   -service platform-system/kuchdesk-local-registry
 ```
 
@@ -178,6 +178,12 @@ values in Helm release metadata.
 For the KuchDesk agent chart, a values file must also provide `cluster.id`
 and `cluster.name`; the workflow supplies image repository, tag, and digest.
 
+The migrated home-lab agent runs in `platform-tools`, while Helm metadata stays
+in `development-tools`. This generic workflow lacks the required post-renderer
+and targets rollout checks at the release namespace; use the [scoped migration
+workflow](../lab/migrations/agent-platform-tools/README.md) for that release.
+The example below is for a profile whose workloads share its release namespace.
+
 ```sh
 cd host-agent
 go run ./cmd/kuchdesk-deploy -profile /absolute/path/to/profile.json
@@ -282,3 +288,5 @@ interactive terminal and existing private enrollment policy/state, and refuses
 a competing controller writer. Stop the controller before login, then resume it
 after successful validation; this command does not manage service lifecycle.
 See [human login](../docs/infisical-human-login.md) for browser recovery and status.
+
+After successful deployment and integration checks, follow the project [image retention and completion rule](../docs/deployment-completion.md).

@@ -1,12 +1,26 @@
 # Historical image reference evidence
 
-Image retirement remains blocked. Automatic approval review rejected historical
+This records the initial historical-reference gate. Automatic approval review rejected historical
 full-manifest retrieval because raw release output can contain Secret objects.
 No safe permitted image-only exporter is currently exposed in this session, and
 Helm has no built-in image-only equivalent covering manifests and hooks. Do not
 retry `helm get manifest`, `get hooks`, `get values`, `get all`, or direct Helm
 Secret decoding through a filtering wrapper in the assistant. No raw release
 payload or Secret data is needed in the returned evidence.
+
+The user subsequently accepted loss of the **three named old Blackbox/k6
+rollback images** and requested their deletion and a download script. Their
+current-reference checks passed, their exact public registry roots and selected
+platform graph passed metadata/fast validation, and normal non-force removal
+completed in Host Docker and the selected node. The initial historical retention
+gate is therefore superseded only for those three images. No full runtime repull
+was performed or claimed; no Secret/history query was retried. Other images,
+especially the rollback-referenced old sidecar, remain protected.
+
+The optional [single recovery script](../lab/scripts/download-retired-images.py)
+uses those exact publisher digests, verifies the observed arm64/v8 Blackbox and
+arm64 k6 platforms, and fails if registry bytes become unavailable. Running it
+restores old images on demand; normal current deployments do not require them.
 
 ## Exact retained scope
 
@@ -52,7 +66,8 @@ revisions or rewrite rollback resources to make an image appear unused.
    occur anywhere in the complete covered scope. Omit Secret bodies, encoded
    release payloads, credential values and raw manifests.
 
-If no trusted interface exists, **stop and retain every candidate**. This document
+For any future retirement still requiring historical coverage, if no trusted
+interface exists, **stop and retain the affected candidate**. This document
 does not authorize provisioning an exporter, creating access or retrieving
 rejected payloads. The smallest immediate action is opening the scope file;
 an approved image-only interface or trusted operator attestation is still needed.
@@ -66,6 +81,7 @@ an approved image-only interface or trusted operator attestation is still needed
 The old sidecar is separately protected by a known ControllerRevision reference;
 it is not an unreferenced retirement candidate. Historical image evidence alone
 does not authorize removal: each named candidate also needs the required actual
-runtime pull or verified reproducible rebuild recovery proof, current consumer
+runtime pull or verified reproducible rebuild recovery proof (unless an explicit
+object-specific discard approval replaces that requirement), current consumer
 checks, and the project's normal non-force image removal gates. The settled Alloy
 inventory is not reopened by this evidence request.

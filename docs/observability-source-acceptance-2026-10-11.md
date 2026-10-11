@@ -157,3 +157,51 @@ Fresh health: Doctor at 16:09:16 UTC passed 7/7 without warnings. At 16:12:32 UT
 Private `~/.codex/task-artifacts/kuchdesk-image-reuse-live-20261011/` retains the Host/Deploy/MCP/Doctor binaries, scratch sources/receipts, `live-test-initial.log`, `live-test.log`, `live-acceptance-repair.json`, `host-tests-followup.log`, `doctor-after.json` and `health-after.json`. Binary installation or registered-runtime activation is not claimed by this helper test. No image reference/content identity, Pod, release, persistent storage or access setup was replaced. No images were removed; disk savings remain unmeasured.
 
 The [exact 31 historical revision pairs and smallest safe evidence procedure](historical-image-reference-export.md) are recorded without another history investigation. No permitted image-only exporter is currently available, so no full-manifest pipeline is provided or executed and every retirement candidate remains retained.
+
+## Later authorized image discard and fresh-reset proposal
+
+The user subsequently explicitly accepted loss of the three old Blackbox/k6
+rollback images and asked for one download script. This supersedes the earlier
+historical rollback-retention blocker for those exact images only. No denied
+Helm/Secret query or history deletion was used. Current checks covered five Host
+containers, 72 running/exited CRI containers, 84 current workload objects including
+zero-replica templates, and an empty k6 TestRun/PrivateLoadZone inventory; no
+candidate consumer was found. All three exact registry root manifests were
+SHA-256 verified and their selected platform graphs passed remote fast validation
+without downloading layers. This is availability evidence, not a full runtime
+repull. The user accepted the old rollback-image loss.
+
+Normal `docker image rm --no-prune` removed Host roots `a50c4c0eda29…`,
+`e66db15b8601…` and `b97b8e32867a…`. Normal CRI removal deleted selected node
+configs `339431e78365…`, `4d79f9384ce4…` and `67876cb51a8e…` respectively.
+Full identities, references and operation receipts are retained in private
+`cleanup-current-images.json` and `cleanup-actions.json` in the
+`kuchdesk-image-reuse-live-20261011` task artifact directory. No force/global prune,
+volume, application-data or history deletion occurred. Host image count fell
+40 to 37, with every other Host image ID retained; node image count became 63.
+The old sidecar and current Alloy image remain preserved.
+
+Docker's image-store layer counter fell by **61,162,523 bytes**. Node containerd
+allocated usage fell by **130,056 KiB**. These are separate measurements, not
+additive physical Mac disk savings; asynchronous GC/background writes can affect
+the node measurement and virtual-disk shrinkage was not measured. Logical image
+bytes removed were 65,340,957 in Host Docker and 65,345,592 in the node store.
+
+At 17:17:06 UTC Doctor passed 7/7, all 33 current Pod UIDs/images remained
+unchanged and Ready, and all eight PVC UIDs/bindings remained unchanged.
+Infisical, its PostgreSQL/Redis, environments, secrets, identities/access and
+availability were preserved. The user excluded them from a proposed fresh reset.
+The concrete private `fresh-reset-manifest.json` proposes Loki/Tempo data claims,
+Prometheus/Alertmanager emptyDir data, and an explicitly optional Grafana database
+reset. It awaits target-specific permanent-data confirmation; no reset or new
+backup/encryption was executed. No separate external-project PostgreSQL/Redis
+instance was identified in the current Docker/Kubernetes inventory; unidentified
+remote/other-context databases are excluded.
+
+[Download script](../lab/scripts/download-retired-images.py): one standalone
+Python 3 file, Docker only by default, with optional explicitly selected KIND
+node restoration/verification. Source safety tests and real Host verification
+passed without a recovery download. The old Blackbox node cache was already
+incomplete; verification refused it rather than claiming completeness. The
+script's guarded repair path has focused regression coverage. Do not run it as
+part of a fresh start unless restoration of these old images is intended.

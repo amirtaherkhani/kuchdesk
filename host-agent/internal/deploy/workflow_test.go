@@ -61,6 +61,12 @@ func (f *fakeRunner) Output(_ context.Context, _ string, name string, args ...st
 	case "git status":
 		return []byte{}, nil
 	case "docker image":
+		if args[1] == "ls" {
+			return nil, nil
+		}
+		if len(args) == 3 {
+			return nil, errors.New("image absent")
+		}
 		return []byte(f.digests), nil
 	case "crane digest":
 		return []byte(f.digests), nil
@@ -167,7 +173,7 @@ func TestApplyPinsDigestAndValidatesRollout(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"git rev-parse", "git status", "helm lint", "go test", "docker build", "docker push", "docker image", "helm template", "helm upgrade", "kubectl --context"}
+	want := []string{"git rev-parse", "git status", "helm lint", "go test", "docker image", "docker image", "docker build", "docker push", "docker image", "helm template", "helm upgrade", "kubectl --context"}
 	if !reflect.DeepEqual(steps, want) {
 		t.Fatalf("unexpected step order: got %v want %v", steps, want)
 	}

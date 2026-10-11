@@ -204,13 +204,74 @@ different image, including a rebuild with changed base images or build inputs.
 Commit those changed inputs before deriving another build version. Do not add a
 timestamp, SemVer suffix or new release tag that this CLI does not support.
 
-The CLI currently checks source/tag agreement and digest pinning; it does not
-automatically enforce registry tag immutability or support reuse without its
-build/push steps. The collision check is a required operator gate before
-`-apply`; do not use that path when the tag already exists. Registry enforcement
-must be verified separately. For upstream service images, preserve their
+The CLI checks source/tag agreement, local immutable-tag collisions and digest
+pinning. It can reuse an eligible exact local build as described below; push
+and registry digest resolution still run. Registry tag collisions remain a
+required operator gate before `-apply`: inspect the destination and verify
+that any already published tag is the exact intended artifact. Registry
+immutability enforcement must be verified separately. For upstream service images, preserve their
 publisher's explicit version and digest rather than relabelling them as a local
 build.
+
+### Avoiding duplicate builds and pulls
+
+Profiles may set `platform` to one explicit Linux `os/architecture[/variant]`,
+`buildArgs` to a map of explicit build argument values, `reuseBuild` to opt into
+offline build reuse, `rebuild` to force a build without cached layers, or
+`refreshImages` to bypass both build and KIND pull reuse. These controls retain
+the existing exact deployment confirmation and clean-source/tag requirements.
+Do not place credentials in build arguments or image labels.
+
+Every build first inspects its exact local tag. If inspection fails, a
+successful exact-tag Docker inventory must confirm absence; unavailable or
+contradictory evidence blocks the build. A known existing immutable tag is
+reused only with an eligible matching fingerprint and actual platform/config
+ID. Otherwise apply stops with a collision error, including explicit rebuild
+or refresh of an already tagged image. For changed inputs, commit those inputs
+and derive the resulting `git-<12-hex-source-commit>` tag; rebuild only a
+confirmed absent target. This local gate does not prove registry absence.
+
+Eligible opt-in builds hash the full local context's names, modes and bytes
+(including dependency/lock/config files and ignored files), Dockerfile path,
+explicit arguments, platform, offline network configuration, explicit Docker context builder and Docker/BuildKit
+setting, Docker server configuration and verified base configurations. The
+fingerprint is recorded on the built image as
+`io.kuchdesk.build-fingerprint.v1`. Bases must be `scratch`, verified pinned
+local digest/platform artifacts without inherited `ONBUILD`, or earlier
+stages. Reuse disables for mutable or unavailable bases, custom frontends,
+remote `ADD`/external `COPY`, build mounts, line continuations, symlinks,
+special files, an implicit platform or a `DOCKER_HOST` endpoint override. This deliberately narrow Dockerfile
+subset avoids guessing at external dependencies. Eligible builds require BuildKit and run with
+`--builder <Docker-context> --network none`; dependencies must already be in the context/base, such as
+vendored Go modules. A failed offline build remains a failure and is never
+silently retried with network access.
+
+The current agent Dockerfile uses a mutable Go base, a mutable syntax frontend
+and cache mounts, so it remains ineligible. For a confirmed absent tag, fresh
+builds use `--pull`, which checks base updates while Docker may reuse existing
+immutable blobs/layers. Rebuild/refresh also adds `--no-cache`. This does not
+promise zero registry traffic, automate dependency updates, or relax tag
+immutability.
+
+With `kindPrepull` and an explicit `platform`, each discovered node is checked
+independently: `crictl inspecti` must show the exact repo digest and actual
+OS/architecture/variant, and `ctr -n k8s.io images check --quiet` must show
+complete content for the requested reference. Host Docker presence cannot
+satisfy either node inventory. Missing/mismatching/unknown node evidence runs
+the existing `ctr` plus CRI pull steps, with an explicit containerd platform,
+and the helper verifies the digest/platform/content again before Helm. With an
+implicit platform, or a mutable reference, it retains the fresh pull path.
+`refreshImages` bypasses these reuse checks. KIND reuse is independent of
+`reuseBuild`; this helper creates no host Docker upstream-pull cache.
+
+Process-local locks serialize the image check/build and each node's
+check/pull, then inspect the store again for waiting callers. Independent CLI
+processes require operator serialization. Helm lint/tests, Doctor checks,
+push/digest resolution, Helm upgrade and rollout checks still run; the current
+namespace limitation below still applies. Fake-store tests cover reuse,
+changed inputs, immutable collisions, absent/unknown images, platform/variant
+mismatches, per-node content, concurrent calls and explicit bypass. These tests
+are source verification; no new live Docker/KIND acceptance is claimed.
 
 Record the image repository/tag, source commit, declared service version,
 platform, build inputs and resolved registry/deployed digest. Keep host Docker

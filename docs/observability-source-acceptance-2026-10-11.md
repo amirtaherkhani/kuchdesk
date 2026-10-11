@@ -17,7 +17,7 @@ Verification passed:
 - Renderer contract: unchanged objects and alerts, restricted rule/dashboard edits, and rejection of missing, duplicate, drifted or already-transformed inputs.
 - Bash/Ruby syntax and Git whitespace checks. Ruby emitted the existing unrelated iStats extension warning; it did not prevent execution.
 
-No production Host code changed. [Pinned inputs and repeat commands](../lab/migrations/observability-retention/README.md#normal-workflow-validation) document source tests. Verification does not upgrade dependencies or install a runtime binary.
+The first source/interval stage changed no production Host code. The later authorized deployment-helper changes are recorded below. [Pinned inputs and repeat commands](../lab/migrations/observability-retention/README.md#normal-workflow-validation) document source tests. Verification does not upgrade dependencies or install a runtime binary.
 
 ## Earlier completed actions
 
@@ -122,3 +122,15 @@ At 15:06:42 UTC, public registry reads SHA-256 verified the exact root index, se
 Evidence: private `alloy-image-checkpoint.json` and `alloy-host-image-tree.txt` beside the live acceptance records. Removed IDs/tags: none; logical removed bytes 0; actual disk savings unmeasured.
 
 Infisical upgrade, its preflight/backup, and SDK upgrade are dismissed from this task. They are not deferred execution items. The old Nova session and task worktree remain preserved, including unrelated untracked acceptance-helper sources and cache files.
+
+## Duplicate build and pull prevention source acceptance
+
+The human authorized project lifecycle rules and real deployment-helper changes in a separate source/code/test scope, with one isolated worker and independent review. Implementation commits `c03ac24992b57ad74041614b1256b07bba4c763b` and `0ea26ca8d8a34f7bc1e875f1917ec495982f06ad` were integrated as `85da2dffbece9670aa1494474de0c77598e96e67`. The reviewed source is used by the normal Host deployment helper; no runtime binary was installed and no live build, pull or cache receipt was created during this source acceptance.
+
+The helper checks local immutable-tag collisions on every build path. Eligible opt-in reuse requires explicit platform, complete local source/dependency/configuration and effective argument fingerprints, verified builder/store/base evidence, and a private receipt matching the exact store image ID. Matching labels alone cannot adopt an existing image. Changed or unknown evidence and rebuild/refresh requests bypass reuse while preserving immutable-tag collision protection. Custom frontend selectors disable eligibility; eligible offline builds explicitly control all ten proxy arguments so implicit Docker client configuration cannot change the fingerprinted inputs. The current agent Dockerfile remains ineligible and uses the confirmed-absent fresh build path with base update checks.
+
+KIND reuse is independent of build opt-in. Each required node must prove the exact digest, actual platform and complete content; absent, mismatching or unknown evidence takes the existing pull path and is reverified before Helm. Host Docker inventory cannot satisfy node requirements. Process-local locks serialize matching calls and recheck stores; independent CLI processes still require operator serialization. Registry collisions remain an operator gate. Arbitrary Helm/upstream pulls, host Docker upstream-pull caching and the migrated namespace's separate deployment script are outside these helper changes.
+
+Independent review first identified exact-image receipt, frontend-selector and implicit-proxy blockers. The followup added focused regression coverage and resolved all three; fresh review found no new important issues. Root then verified the merged main checkout at 15:43 UTC: `GOPROXY=off GOSUMDB=off GOCACHE=/tmp/kuchdesk-resume-go-cache go test -count=1 ./...` from `host-agent` passed all packages, and `go test -race -count=1 ./internal/deploy` passed. Tests use fake image stores and temporary receipt directories. The full suite's existing local HTTP test servers used approved loopback sandbox escalation. Git whitespace checks passed. This proves source behavior, not live image reuse or disk savings.
+
+[Supported profile fields and limits](../host-agent/README.md#avoiding-duplicate-builds-and-pulls) and [project rules](../AGENTS.md#avoid-duplicate-image-work) document the workflow. Private root verification logs are `host-tests-image-dedup-main.log` and `host-deploy-race-image-dedup-main.log` beside the live acceptance records. Image retirement remains blocked by the historical-reference and runtime-recovery gates above; removed IDs/tags and measured logical removed bytes remain zero.

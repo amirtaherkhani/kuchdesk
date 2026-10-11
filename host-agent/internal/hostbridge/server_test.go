@@ -147,7 +147,7 @@ func TestBridgeRejectsEveryAdministrativeOperationBeforeCommander(t *testing.T) 
 		t.Fatal("K8 invoked host admin commander")
 		return infisical.CommandResult{}, nil
 	}}, fakeDoctor{}, bridgeToken)
-	for _, op := range []string{"project.rename", "project.create", "project.delete", "secret.create", "secret.update", "secret.delete", "membership.add", "membership.list", "role.create", "future.operation"} {
+	for _, op := range []string{"project.rename", "project.create", "project.delete", "secret.create", "secret.update", "secret.delete", "membership.add", "membership.list", "role.create", "grafana.admin.password", "grafana.admin.password.reset", "future.operation"} {
 		body, _ := json.Marshal(map[string]string{"operation": op, "projectId": "any-project"})
 		w := httptest.NewRecorder()
 		server.Handler().ServeHTTP(w, authorizedRequest("/v1/infisical/commands", string(body)))

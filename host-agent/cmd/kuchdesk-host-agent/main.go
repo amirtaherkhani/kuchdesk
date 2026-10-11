@@ -15,9 +15,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -41,6 +43,21 @@ type apiClient struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "grafana-admin-password" || os.Args[1] == "grafana-admin-password-reset") {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		var err error
+		if os.Args[1] == "grafana-admin-password" {
+			err = runGrafanaAdminPassword(ctx, os.Args[2:], os.Stdout, openGrafanaTerminal, readGrafanaBootstrapPassword)
+		} else {
+			err = runGrafanaAdminPasswordReset(ctx, os.Args[2:], os.Stdout, openGrafanaTerminal, readGrafanaHiddenPassword, resetGrafanaAdminPassword)
+		}
+		stop()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "host-agent Grafana password command failed:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "admin-login" {
 		if err := runAdminLogin(os.Args[2:], os.Stdout, os.Stderr, enrollmentcli.Run); err != nil {
 			fmt.Fprintln(os.Stderr, "host-agent admin login failed:", err)

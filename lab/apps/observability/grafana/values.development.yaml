@@ -1,0 +1,27 @@
+# Shared approved development behavior; layer site/Infisical settings separately.
+# Use only on deployments intended to permit anonymous development editing.
+envFromSecret: grafana-admin
+admin:
+  existingSecret: grafana-admin
+  userKey: GRAFANA_ADMIN_USER
+  passwordKey: GRAFANA_ADMIN_PASSWORD
+
+grafana.ini:
+  auth.anonymous:
+    enabled: true
+    org_name: Main Org.
+    org_role: Editor
+  users:
+    viewers_can_edit: false
+
+sidecar:
+  dashboards:
+    enabled: true
+    resource: configmap
+    label: grafana_dashboard
+    labelValue: "1"
+    defaultFolderName: Platform
+    folderAnnotation: grafana_folder
+    provider:
+      allowUiUpdates: false
+      foldersFromFilesStructure: true

@@ -10,7 +10,8 @@ generatorOptions:
     app.kubernetes.io/component: dashboard
     grafana_dashboard: "1"
   annotations:
-    grafana_folder: Platform
+    # Absolute sidecar path avoids Platform/Platform under the default folder.
+    grafana_folder: /tmp/dashboards/Platform
 
 configMapGenerator:
   - name: platform-observability-dashboard

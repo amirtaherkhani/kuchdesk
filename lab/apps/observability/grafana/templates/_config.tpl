@@ -166,7 +166,9 @@ provider.yaml: |-
       updateIntervalSeconds: {{ .Values.sidecar.dashboards.provider.updateIntervalSeconds | default 30 }}
       options:
         foldersFromFilesStructure: {{ .Values.sidecar.dashboards.provider.foldersFromFilesStructure }}
-        path: {{ .Values.sidecar.dashboards.folder }}{{- with .Values.sidecar.dashboards.defaultFolderName }}/{{ . }}{{- end }}
+        {{- /* Scan the parent when deriving Grafana folders from directories;
+             scanning the default subfolder itself imports its files in General. */}}
+        path: {{ .Values.sidecar.dashboards.folder }}{{- if not .Values.sidecar.dashboards.provider.foldersFromFilesStructure }}{{- with .Values.sidecar.dashboards.defaultFolderName }}/{{ . }}{{- end }}{{- end }}
 {{- end -}}
 
 {{- define "grafana.secretsData" -}}

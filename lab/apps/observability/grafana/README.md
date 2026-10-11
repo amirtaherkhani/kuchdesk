@@ -99,6 +99,12 @@ cleanup passed after deployment, including exported revisions, schema migration
 and a nonempty panel. Fresh-install acceptance used a non-destructive render;
 no live database was wiped for validation.
 
+One additional UID-guarded ConfigMap fixture verified automatic file-provider
+create/update/removal through the existing 30-second poll without a Pod restart.
+The sidecar's explicit admin provisioning-reload request still returns HTTP 403;
+this warning did not prevent the polling test. No password, credential Secret
+or Infisical authentication changes were used to repair that request.
+
 Regression checks:
 
 ```sh

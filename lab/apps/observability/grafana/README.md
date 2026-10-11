@@ -47,7 +47,7 @@ The project dashboard ConfigMaps use the absolute `grafana_folder` annotation
 and UIDs are unchanged. Other explicit absolute folder annotations still work.
 Relative annotations are interpreted relative to the sidecar's default folder.
 
-On the next rollout, unannotated file-provisioned dashboards will be placed in
+On rollout, unannotated file-provisioned dashboards are placed in
 Platform; their content/UIDs remain source-owned (`allowUiUpdates: false`).
 Apply the dashboard Kustomization before changing the Grafana sidecar directory
 so the two project ConfigMaps already have their absolute target annotation.
@@ -90,8 +90,20 @@ created in General. Anonymous create/read/edit in the existing Platform folder
 returned 201/200/200; the 29 existing dashboard bodies were unchanged and both
 temporary fixtures were removed after restoration checks. These results verify
 the current deployment's behavior, not a fresh installation of the new source.
-The new chart/provider changes have been render-tested, not rolled out; no live
-database was wiped for validation.
+The folder-only rollout completed on 2026-10-11 at Helm revision 5: all 29
+dashboards are now in Platform, with their UIDs/content hashes and the three
+datasources unchanged. The Infisical CR, existing Secret references, Deployment
+identity/images and all eight PVCs were preserved. Repeating the guarded rollout
+made zero mutations. Anonymous helper create/read/edit/reapply and fixture
+cleanup passed after deployment, including exported revisions, schema migration
+and a nonempty panel. Fresh-install acceptance used a non-destructive render;
+no live database was wiped for validation.
+
+One additional UID-guarded ConfigMap fixture verified automatic file-provider
+create/update/removal through the existing 30-second poll without a Pod restart.
+The sidecar's explicit admin provisioning-reload request still returns HTTP 403;
+this warning did not prevent the polling test. No password, credential Secret
+or Infisical authentication changes were used to repair that request.
 
 Regression checks:
 

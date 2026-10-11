@@ -314,6 +314,61 @@ func TestConcurrentKindRequestsReuseEachNodeOnce(t *testing.T) {
 	}
 }
 
+// containerd's transfer unpacker can succeed using an existing snapshot while
+// leaving a compressed blob absent. The recovery must retain the normal pull,
+// fetch only if incomplete, and stay inside the same per-store lock.
+type unpackOnlyRunner struct {
+	*imageStoreRunner
+	contentFetches int
+}
+
+func (r *unpackOnlyRunner) Run(ctx context.Context, dir, name string, args ...string) error {
+	if name == "docker" && len(args) > 6 && args[0] == "exec" && args[2] == "ctr" {
+		ref, node := args[len(args)-1], args[1]
+		if args[5] == "content" && args[6] == "fetch" {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.pulls[node+"/ctr"] != 1 {
+				return errors.New("normal verified pull must precede content repair")
+			}
+			r.contentFetches++
+			r.ready[node+"/"+ref] = true
+			return nil
+		}
+		if args[5] == "images" && args[6] == "pull" {
+			if err := r.imageStoreRunner.Run(ctx, dir, name, args...); err != nil {
+				return err
+			}
+			r.mu.Lock()
+			r.ready[node+"/"+ref] = false
+			r.mu.Unlock()
+			return nil
+		}
+	}
+	return r.imageStoreRunner.Run(ctx, dir, name, args...)
+}
+
+func TestKindRestoresContentAfterUnpackOnlyPull(t *testing.T) {
+	s := reusableSpec(t)
+	r := &unpackOnlyRunner{imageStoreRunner: newImageStoreRunner()}
+	w := Workflow{Runner: r}
+	ref := s.ImageRepository + ":" + s.ImageTag + "@sha256:" + strings.Repeat("a", 64)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := w.ensureKindImage(context.Background(), s, "node-a", ref); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if r.pulls["node-a/ctr"] != 1 || r.pulls["node-a/cri"] != 1 || r.contentFetches != 1 || !w.kindImagePresent(context.Background(), s, "node-a", ref) {
+		t.Fatalf("unpack-only content repair was not serialized and complete: pulls=%v fetches=%d", r.pulls, r.contentFetches)
+	}
+}
+
 func TestOfflineBuildEligibilityRejectsUnknownDependencies(t *testing.T) {
 	pin := "sha256:" + strings.Repeat("d", 64)
 	for _, dockerfile := range []string{

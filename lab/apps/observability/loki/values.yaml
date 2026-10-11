@@ -22,11 +22,27 @@ loki:
   limits_config:
     allow_structured_metadata: true
     volume_enabled: true
-    retention_period: 120h
+    retention_period: 72h
 
   compactor:
     retention_enabled: true
     delete_request_store: filesystem
+
+  # The rules sidecar and Loki mount the same volume at /rules.
+  # Without this, Loki's default /var/loki/rules does not read delivered files.
+  rulerConfig:
+    storage:
+      type: local
+      local:
+        directory: /rules
+
+# Preserve the approved upstream sidecar version on routine deployments.
+sidecar:
+  image:
+    registry: docker.io
+    repository: kiwigrid/k8s-sidecar
+    tag: "2.8.1"
+    sha: abb55b2165c60e8f97e473862c7a3123df6f67d44f592949577c29b8fb2df9d6
 
 singleBinary:
   replicas: 1

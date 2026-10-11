@@ -138,7 +138,10 @@ grafana.ini:
     default_theme: dark
     viewers_can_edit: false
   auth.anonymous:
-    enabled: false
+    # Approved shared Editor access on the existing homelab ingress.
+    enabled: true
+    org_name: Main Org.
+    org_role: Editor
   unified_alerting:
     enabled: true
   plugins:

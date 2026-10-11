@@ -80,7 +80,7 @@ kubectl apply -f apps/platform/infisical/manifests/https-redirect.yaml
 # Infisical Operator: use the approval-gated, checksum-pinned local-chart workflow
 # in apps/platform/infisical-operator/README.md; a bare upstream upgrade restores broad TokenRequest grants.
 helm upgrade --install loki grafana/loki -n observability --version 7.0.0 -f apps/observability/loki/values.yaml --wait
-helm upgrade --install monitoring prometheus-community/kube-prometheus-stack -n observability --version 87.15.1 -f apps/observability/kube-prometheus-stack/values.yaml --wait
+./scripts/helm-monitoring.sh upgrade --install monitoring prometheus-community/kube-prometheus-stack -n observability --version 87.15.1 -f apps/observability/kube-prometheus-stack/values.yaml --wait
 kubectl apply -f .generated/manifests/30-dns-blackbox-config.json
 kubectl apply -k apps/observability/host-dns-monitoring
 kubectl apply -k apps/observability/grafana/manifests/dashboard
@@ -92,6 +92,28 @@ kubectl apply -k apps/observability/k6/dashboard
 ```
 
 After installation, confirm `observability/grafana-admin` reports `ReadyToSyncSecrets=True` and the Grafana Deployment is Ready. The image renderer is part of the Grafana chart. For changes to a live release, render and server-side dry-run before applying.
+
+The homelab profiles retain the approved shared anonymous Grafana **Editor** role
+and three-day history settings: Loki 72h, Prometheus 3d, Alertmanager 72h, and the
+existing Tempo 72h. Anonymous Editor includes dashboard/folder deletion and
+alert/notification editing on the existing ingress; it does not grant server or
+user administration. Review this profile's access before using it for another
+installation. Grafana annotation expiry remains excluded.
+
+Use `scripts/helm-monitoring.sh` for both `template` and `upgrade`. Its temporary,
+process-scoped Helm 4 plugin applies the checked-in renderer to the pinned
+87.15.1 chart, aligning API-server availability records and dashboard labels to
+3d while preserving every alert definition. Bare monitoring Helm commands
+restore the chart's 30d records and dashboard and are not the supported path.
+Missing, duplicate, changed or previously transformed renderer targets fail
+closed. Existing-release upgrades also need the reviewed admission-hook scope;
+the completed retention upgrade used `--no-hooks` to leave seven unchanged
+hooks unexecuted. First installation still needs its normal admission setup.
+
+The Loki profile now explicitly maps local ruler storage to the sidecar's shared
+`/rules` directory and retains the approved sidecar digest. This source correction
+has not been deployed or tested with a live rule fixture; review the bounded
+Loki rollout/test before changing the existing release.
 
 The Host and DNS dashboard covers the Docker Desktop Kubernetes node, the macOS host, and Technitium DNS. macOS node_exporter must be reachable from the cluster at `host.docker.internal:9101`; this installation already runs it as a LaunchAgent. `host-dns-monitoring/` scrapes that endpoint and probes the generated site hostname through Technitium and Docker Desktop's host DNS endpoint, plus public recursive DNS through Technitium, every 30 seconds. The DNS probe uses a rendered ConfigMap and automatically reloads it, so a site-domain change only needs the generated ConfigMap reapplied. The Technitium HTTP health endpoint can return HTTP 200 with an `invalid-token` payload and does not prove DNS works.
 

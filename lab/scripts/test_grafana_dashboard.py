@@ -60,6 +60,22 @@ class DashboardRoutingTests(unittest.TestCase):
         self.assertIn(("POST", "/api/folders", {"uid": "kuchdesk-platform", "title": "Platform"}), api.calls)
         self.assertFalse(any("permissions" in p or "admin" in p for _, p, _ in api.calls))
 
+    def test_exported_dashboard_reapply_ignores_server_owned_fields(self):
+        api = GrafanaAPI()
+        exported = {**self.payload["spec"], "id": 73, "version": 4}
+        self.assertEqual(module.apply_dashboard(api, exported), "created")
+        submission = next(b for m, _, b in api.calls if m == "POST")
+        self.assertNotIn("id", submission["spec"])
+        self.assertNotIn("version", submission["spec"])
+        api.dashboard["spec"].update(id=91, version=5)
+        self.assertEqual(module.apply_dashboard(api, exported), "unchanged")
+        api.dashboard["spec"].pop("uid")
+        self.assertEqual(module.apply_dashboard(api, exported), "unchanged")
+        self.assertEqual([m for m, _, _ in api.calls if m != "GET"], ["POST"])
+        exported["title"] = "Changed content"
+        self.assertEqual(module.apply_dashboard(api, exported), "updated")
+        self.assertEqual(exported["version"], 4)
+
     def test_existing_folder_creation_race_reuses_winner(self):
         api = GrafanaAPI(folder=False, collision=True)
         self.assertEqual(module.apply_dashboard(api, self.payload), "created")

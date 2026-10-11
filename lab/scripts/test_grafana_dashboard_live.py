@@ -23,7 +23,7 @@ class AnonymousAcceptance(unittest.TestCase):
         uid = "anon-acceptance-" + uuid.uuid4().hex[:20]
         path = module.DASHBOARDS + "/" + uid
         self.assertEqual(request("GET", path)[0], 404)
-        payload = {"metadata": {"name": uid}, "spec": {"uid": uid, "title": "Temporary anonymous acceptance " + uid, "editable": True, "schemaVersion": 41, "panels": [], "tags": [uid]}}
+        payload = {"metadata": {"name": uid}, "spec": {"uid": uid, "id": None, "version": 0, "title": "Temporary anonymous acceptance " + uid, "editable": True, "schemaVersion": 41, "panels": [], "tags": [uid]}}
         created = False
         try:
             self.assertEqual(module.apply_dashboard(request, payload), "created")

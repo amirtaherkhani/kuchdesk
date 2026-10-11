@@ -14,6 +14,12 @@ FOLDERS = "/api/search?type=dash-folder&query=Platform&limit=1000"
 DASHBOARDS = "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards"
 
 
+def dashboard_content(spec):
+    # Storage IDs and revisions vary after save/export. The resource name and
+    # resourceVersion supply identity and optimistic concurrency in this API.
+    return {key: value for key, value in spec.items() if key not in ("id", "version", "uid")}
+
+
 def checked(status, accepted):
     if status not in accepted:
         raise RuntimeError(f"Grafana request denied or failed (HTTP {status}); existing access is required")
@@ -57,6 +63,8 @@ def apply_dashboard(request, payload):
         raise RuntimeError("Dashboard requires a stable UID of 1-40 letters, digits, hyphens or underscores")
     if not isinstance(payload.get("spec"), dict) or payload["spec"].get("uid", uid) != uid:
         raise RuntimeError("Dashboard UID and metadata.name must match")
+    payload["spec"].pop("id", None)
+    payload["spec"].pop("version", None)
     annotations = metadata.get("annotations", {})
     if not isinstance(annotations, dict):
         raise RuntimeError("Dashboard annotations must be an object")
@@ -78,7 +86,7 @@ def apply_dashboard(request, payload):
     checked(status, (200,))
     if legacy.get("meta", {}).get("provisioned"):
         raise RuntimeError("Dashboard is file-provisioned; update its source ConfigMap instead")
-    if existing.get("spec") == payload["spec"]:
+    if isinstance(existing.get("spec"), dict) and dashboard_content(existing["spec"]) == dashboard_content(payload["spec"]):
         return "unchanged"
     metadata["resourceVersion"] = existing["metadata"]["resourceVersion"]
     # Keep current annotations rather than deleting unrelated dashboard metadata.

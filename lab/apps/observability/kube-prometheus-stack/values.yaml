@@ -4,7 +4,7 @@ prometheus:
       registry: docker.io
       repository: prom/prometheus
       tag: "v3.13.1"
-    retention: 5d
+    retention: 3d
     # Required for k6's experimental-prometheus-rw output.
     enableRemoteWriteReceiver: true
 
@@ -71,6 +71,7 @@ prometheusOperator:
 
 alertmanager:
   alertmanagerSpec:
+    retention: 72h
     image:
       registry: docker.io
       repository: prom/alertmanager

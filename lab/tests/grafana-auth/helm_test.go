@@ -68,3 +68,31 @@ func TestInvalidNativeConfigurationFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestHomelabKeepsApprovedAnonymousEditor(t *testing.T) {
+	config, err := render(t, "templates/configmap.yaml")
+	if err != nil {
+		t.Fatal(err, config)
+	}
+	var anonymous []string
+	inside := false
+	for _, line := range strings.Split(config, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			inside = line == "[auth.anonymous]"
+			continue
+		}
+		if inside {
+			anonymous = append(anonymous, line)
+		}
+	}
+	section := strings.Join(anonymous, "\n")
+	for _, want := range []string{"enabled = true", "org_role = Editor", "org_name = Main Org."} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("normal homelab render loses approved anonymous setting %q: %s", want, section)
+		}
+	}
+	if strings.Contains(section, "org_role = Admin") {
+		t.Fatal("anonymous server administration must remain excluded")
+	}
+}

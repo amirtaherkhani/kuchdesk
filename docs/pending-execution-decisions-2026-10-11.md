@@ -1,6 +1,6 @@
-# Remaining execution decisions — 2026-10-11
+# Archived execution decisions — 2026-10-11
 
-This is the active list after the 08:00–08:14 UTC audits. The completed agent/k6 namespace stages, bounded config-reload verification and prior image removals remain in their historical reports. This continuation made no live rollout, deletion, grant or credential change. Infisical upgrade/SDK work is excluded; Colima/K3s research is handled elsewhere.
+This records decisions prepared after the 08:00–08:14 UTC audits. Later approvals and actions completed the three old node-agent image removals, two old Blackbox ReplicaSet removals, Loki sidecar update, retention change, ten storage-claim deletions, source integration and bounded k6 run. These decisions are not pending again. The [current acceptance report](observability-source-acceptance-2026-10-11.md) records remaining source/live gates and evidence limits. Infisical upgrade/preflight/backup and SDK work are dismissed; Colima/K3s research is handled elsewhere. Original scopes below are historical records, not authorization for new mutations.
 
 ## 1. Three old agent node images
 

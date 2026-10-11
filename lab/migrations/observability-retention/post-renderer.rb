@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# Candidate only, pinned to the reviewed monitoring 87.15.1 render.
+# Normal monitoring workflow, pinned to the reviewed 87.15.1 chart render.
 require 'yaml'
 require 'json'
 require 'digest'

@@ -1,6 +1,39 @@
-# Three-day retention candidates
+# Three-day retention workflow
 
-**Do not apply without the exact action-time data-loss approval.** These files are not included in active deployment values. See the [assessment, evidence and approval scope](../../../docs/observability-retention-plan-2026-10-11.md).
+The approved retention change completed on 2026-10-11: Loki 72h, Prometheus 3d and Alertmanager 72h. Tempo already used 72h and was left unchanged. Canonical app values now preserve these settings. See the [current acceptance report](../../../docs/observability-source-acceptance-2026-10-11.md) for earlier live evidence, current offline verification and pending live work.
+
+Use [helm-monitoring.sh](../../scripts/helm-monitoring.sh) for normal monitoring templates and upgrades. It creates a temporary, process-scoped Helm 4 plugin for the checked-in renderer and removes the plugin directory on exit. It does not install a global plugin. Exact content hashes and identities reject missing, duplicate, changed or already-transformed targets. Re-review drift; do not bypass the guard. Earlier approval does not authorize another rollout, purge, backup or optional Grafana expiry.
+
+## Normal workflow validation
+
+Obtain the exact Loki 7.0.0 and kube-prometheus-stack 87.15.1 archives from the official release repositories and verify the SHA-256 values below. Tests do not fetch charts automatically. From the repository root, using absolute archive paths and a private temporary output directory:
+
+```sh
+export KUCHDESK_LOKI_CHART_ARCHIVE="$ARCHIVES/loki-7.0.0.tgz"
+export KUCHDESK_MONITORING_CHART_ARCHIVE="$ARCHIVES/kube-prometheus-stack-87.15.1.tgz"
+go -C lab test ./...
+helm template monitoring "$KUCHDESK_MONITORING_CHART_ARCHIVE" \
+  -n observability --kube-version 1.36.1 \
+  -f lab/apps/observability/kube-prometheus-stack/values.yaml \
+  > "$PRIVATE/monitoring-base.yaml"
+python3 lab/migrations/observability-retention/test_renderer.py \
+  "$PRIVATE/monitoring-base.yaml"
+lab/scripts/helm-monitoring.sh template monitoring \
+  "$KUCHDESK_MONITORING_CHART_ARCHIVE" \
+  -n observability --kube-version 1.36.1 \
+  -f lab/apps/observability/kube-prometheus-stack/values.yaml \
+  > "$PRIVATE/monitoring-candidate.yaml"
+```
+
+Requirements: Go, Helm 4, Ruby with bundled YAML/JSON, and Mike Farah's `yq`. Without the archive variables, chart-dependent Go tests explicitly skip; that is not full acceptance. The renderer contract compares all objects and every alert and checks missing, duplicate, drifted and reapplied inputs. Normal-workflow tests verify retention, dashboard alignment, Loki's shared rules directory and sidecar digest, and rejection of a renderer override.
+
+For a live release, refresh private user values and compare a live-aware render before an approved upgrade. Never commit live values or bypass Helm ownership with generic apply. The earlier retention upgrade used `--no-hooks` after verifying seven unchanged admission hooks; initial installation still requires normal admission setup. An offline render alone does not establish safe hook handling for a future upgrade.
+
+The completed live check observed Prometheus 3.13.1 hot reload with the same Pod, loaded retention 3d and TSDB retention 259200 seconds, although its flags endpoint still reported 5d. Alertmanager was replaced with 72h and zero silences before and after. All 218 rules were healthy, all 133 alerts stayed unchanged, and all 29 dashboard UIDs were preserved. These are earlier measurements; subsequent Docker startup/readiness verification does not repeat them. Physical expiry of old Loki chunks was not proven.
+
+## Historical candidate record
+
+The overlay files, preflight measurements and remaining-gate wording below record the original assessment before the approved operation. They are retained as historical evidence. Optional Grafana annotation expiry remains excluded and undeployed. See the [dated assessment](../../../docs/observability-retention-plan-2026-10-11.md).
 
 | File | Candidate |
 |---|---|

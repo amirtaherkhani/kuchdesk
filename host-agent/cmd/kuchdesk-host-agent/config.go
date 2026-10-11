@@ -29,7 +29,7 @@ func parseConfig(args []string) (config, error) {
 	var cfg config
 	flags := flag.NewFlagSet("kuchdesk-host-agent", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage: kuchdesk-host-agent [DNS options]\n       kuchdesk-host-agent admin-login [--project-root /absolute/project]")
+		fmt.Fprintln(flags.Output(), "Usage: kuchdesk-host-agent [DNS options]\n       kuchdesk-host-agent admin-login [--project-root /absolute/project]\n       kuchdesk-host-agent grafana-admin-password --kube-context CONTEXT\n       kuchdesk-host-agent grafana-admin-password-reset --kube-context CONTEXT [--user-id ID]")
 		flags.PrintDefaults()
 	}
 	flags.BoolVar(&cfg.CheckTarget, "check-target", false, "resolve and print the DNS target without changing Technitium")

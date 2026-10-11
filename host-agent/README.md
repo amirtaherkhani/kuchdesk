@@ -441,4 +441,59 @@ a competing controller writer. Stop the controller before login, then resume it
 after successful validation; this command does not manage service lifecycle.
 See [human login](../docs/infisical-human-login.md) for browser recovery and status.
 
+### Manual Grafana password recovery
+
+Build the existing Go Host Agent from the verified source checkout:
+
+```sh
+cd host-agent
+go build -o /tmp/kuchdesk-host-agent ./cmd/kuchdesk-host-agent
+```
+
+Run these commands yourself in your own interactive Terminal. Retrieval reads
+only `observability/grafana-admin` key `GRAFANA_ADMIN_PASSWORD` using the explicitly
+selected Kubernetes context and existing `get Secret` access:
+
+```sh
+/tmp/kuchdesk-host-agent grafana-admin-password --kube-context docker-desktop
+```
+
+Type `REVEAL GRAFANA BOOTSTRAP PASSWORD` at the prompt to display that value.
+The value remains in the terminal's scrollback. Cancellation does not fetch it.
+This is the Infisical-managed **bootstrap copy**, not a lookup of the current
+Grafana database password. Grafana uses its initial admin password on database
+initialization; a later database password reset can leave this copy stale. If
+the database password differs, the retrieved bootstrap value will not sign you
+in. The command cannot determine or reveal the database password.
+
+To set a new database password, verify the admin account's numeric ID through
+your existing admin session, then run:
+
+```sh
+/tmp/kuchdesk-host-agent grafana-admin-password-reset \
+  --kube-context docker-desktop --user-id VERIFIED_ADMIN_ID
+```
+
+Enter the new password twice with input hidden, then type
+`RESET GRAFANA ADMIN PASSWORD` to submit it. The CLI default ID is `1`; that
+default does not verify the account. Passwords must be printable UTF-8, at most
+4096 bytes, without surrounding whitespace. Ctrl-C/Ctrl-D cancel hidden input
+and restore terminal echo. The underlying Grafana CLI may enforce additional
+password requirements. Failures stop without retrying a reset automatically.
+
+Reset uses existing Kubernetes access to the fixed Grafana Deployment/container
+and the installed Grafana CLI with its current configuration and
+`/var/lib/grafana` data path. The password is sent only on stdin. Infisical,
+its managed Secret, other users, dashboards and other databases are not changed.
+The command does not synchronize or rotate the bootstrap credential afterward.
+Use `--help` for both commands without connecting to the cluster.
+
+Both commands require stdin/stdout/stderr to reference the same terminal;
+pipes and redirection fail before accessing Kubernetes. They expose no new
+bridge, HTTP or MCP operation, credential setup, permission grant, clipboard
+action or unattended startup behavior. Dependencies are unchanged. Error
+messages and child-process output are sanitized. Unit tests use dummy credentials;
+the terminal integration test exercises hidden input, cancellation, echo
+restoration and redirected-output rejection with fake kubectl.
+
 After successful deployment and integration checks, follow the project [image retention and completion rule](../docs/deployment-completion.md).

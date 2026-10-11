@@ -7,12 +7,23 @@ import (
 )
 
 func render(t *testing.T, template string, extra ...string) (string, error) {
+	return renderWithProfile(t, "values.homelab.yaml", template, extra...)
+}
+
+func renderWithProfile(t *testing.T, profile, template string, extra ...string) (string, error) {
 	t.Helper()
 	helm, e := exec.LookPath("helm")
 	if e != nil {
 		t.Skip("helm is required for chart contract tests")
 	}
-	args := []string{"template", "grafana", "../../apps/observability/grafana", "-n", "observability", "-f", "../../apps/observability/grafana/values.homelab.yaml", "--show-only", template}
+	args := []string{"template", "grafana", "../../apps/observability/grafana", "-n", "observability", "-f", "../../apps/observability/grafana/" + profile, "--show-only", template}
+	if profile == "values.development.yaml" {
+		// A portable profile must be paired with that environment's explicit
+		// Infisical selectors. These render-only fixtures are not credentials.
+		for key, value := range map[string]string{"hostAPI": "https://infisical.example.test/api", "credentialsSecretName": "dummy-auth", "credentialsSecretNamespace": "dummy-secrets", "projectSlug": "dummy-project", "envSlug": "dummy-env", "secretsPath": "/apps/observability/grafana"} {
+			args = append(args, "--set-string", "infisical."+key+"="+value)
+		}
+	}
 	out, e := exec.Command(helm, append(args, extra...)...).CombinedOutput()
 	return string(out), e
 }
@@ -94,5 +105,37 @@ func TestHomelabKeepsApprovedAnonymousEditor(t *testing.T) {
 	}
 	if strings.Contains(section, "org_role = Admin") {
 		t.Fatal("anonymous server administration must remain excluded")
+	}
+}
+
+func TestHomelabRoutesUnannotatedDashboardFilesIntoPlatform(t *testing.T) {
+	for _, profile := range []string{"values.homelab.yaml", "values.development.yaml"} {
+		deployment, err := renderWithProfile(t, profile, "templates/deployment.yaml")
+		if err != nil {
+			t.Fatal(err, deployment)
+		}
+		if !strings.Contains(deployment, "value: \"/tmp/dashboards/Platform\"") {
+			t.Fatal("unannotated dashboard files still route to General")
+		}
+		provider, err := renderWithProfile(t, profile, "templates/configmap-dashboard-provider.yaml")
+		if err != nil {
+			t.Fatal(err, provider)
+		}
+		if !strings.Contains(provider, "foldersFromFilesStructure: true") || !strings.Contains(provider, "allowUiUpdates: false") {
+			t.Fatal("folder creation or provisioned dashboard ownership changed")
+		}
+		if !strings.Contains(provider, "path: /tmp/dashboards\n") {
+			t.Fatal("provider must scan the parent of the default Platform subfolder")
+		}
+	}
+}
+
+func TestProjectDashboardsKeepOnePlatformDirectory(t *testing.T) {
+	out, err := exec.Command("kubectl", "kustomize", "../../apps/observability/grafana/manifests/dashboard").CombinedOutput()
+	if err != nil {
+		t.Fatal(err, string(out))
+	}
+	if strings.Count(string(out), "grafana_folder: /tmp/dashboards/Platform") != 2 {
+		t.Fatal("relative annotation would nest Platform twice after changing the default sidecar directory")
 	}
 }

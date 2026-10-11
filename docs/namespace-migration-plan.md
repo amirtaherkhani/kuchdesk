@@ -1,17 +1,17 @@
 # Namespace migration preparation
 
-Prepared from live metadata on 2026-10-10 and reverified on 2026-10-11. The approved k6 and agent stages are complete; the remaining mappings are preparation. The current profile remains operational. See the [namespace architecture](namespace-proposal.md).
+Prepared from live metadata on 2026-10-10 and reverified on 2026-10-11. The approved k6, agent and Traefik stages are complete. Traefik completed at 14:49 UTC; see the [current acceptance report](observability-source-acceptance-2026-10-11.md#approved-loki-and-traefik-live-acceptance). Earlier inventories below retain their inspection context; the other namespace mappings remain preparation. The current profile remains operational. See the [namespace architecture](namespace-proposal.md).
 
 ## Current state
 
 - No running NATS, RabbitMQ or Kafka Pods, Deployments, StatefulSets or Services were found; the current Helm inventory contains no matching releases. Do not infer running brokers from retained PVCs or monitoring links.
 - Infisical's `platform-secrets/redis-master` is 1/1 ready and stays internal. Its PostgreSQL and all other `platform-secrets` resources stay in place.
 - Doctor passes 8/8, enrollment reports two projects. The mapped agent, k6, Traefik, cert-manager, registry and Technitium workloads were ready at inspection.
-- Preserve all system namespaces, all ten bound `platform-storage` PVCs, and all other bound claims. No namespace rename, broker installation or data move is included.
+- Preserve system namespaces and the eight remaining captured bound claims. The ten historical `platform-storage` claims were deleted under their separate explicit scope; this plan does not authorize further storage operations. No namespace rename, broker installation or data move is included.
 
 ## Mapping recorded before the k6 stage
 
-Names below stay the same unless a separate reviewed plan says otherwise. This records the original mapping; k6 and the agent have since moved to their approved targets. Other target resources have not been created by this work.
+Names below stay the same unless a separate reviewed plan says otherwise. This records the original mapping; k6 and the agent have since moved to their approved targets. Traefik also completed on 2026-10-11; other uncompleted target resources have not been created by this work.
 
 | Current objects / ownership | Intended namespace | Dependencies and gate |
 |---|---|---|
@@ -127,9 +127,10 @@ Follow the [agent renderer workflow](../lab/migrations/agent-platform-tools/READ
 
 ## Remaining namespace dependencies
 
-The k6 and agent stages are complete. Remaining moves need their own resource/ownership plan and applicable approval; no further live stage is started:
+The k6, agent and Traefik stages are complete. Remaining moves need their own resource/ownership plan and applicable approval:
 
-- Traefik/cert-manager to `platform-networking`: map Helm records, cluster-resource ownership, admission webhooks, Service routing and certificate issuers/consumers before any cutover. This is a networking/PKI gate, not a routine namespace edit.
+- Traefik completed at revision 2, with Helm metadata retained in `platform-system`. Use the [maintained renderer workflow](../lab/migrations/traefik-platform-networking/README.md) for future upgrades; public routing/TLS and existing host/NodePorts passed acceptance.
+- cert-manager to `platform-networking`: map Helm records, cluster-resource ownership, admission webhooks and certificate issuers/consumers before a separately approved cutover. Its existing CA placement and certificate deliveries remain unchanged.
 - Technitium to `platform-networking`: map its bound data, service/admin endpoint, Host LaunchAgent namespace and private Secret references. DNS continuity and storage recovery require a separate approved handover.
 - Registry to `platform-tools`: map the active bound registry claim and the second retained registry claim's owner, image recovery dependencies and the localhost/node pull path. Neither registry claim belongs to the ten-claim deletion set.
 
@@ -147,7 +148,7 @@ Reference-only reads found these concrete dependencies; no Secret payload or CA 
 | Technitium `15.5.1` | StatefulSet `technitium/technitium`, claim template `data`, bound `data-technitium-0`; DNS TCP/UDP 53 and admin 5380; separate LAN LoadBalancer | Prepare an approved volume handover, DNS continuity and Host/admin Secret-reference changes; a namespace edit cannot move the bound claim |
 | Registry `2` | Deployment `platform-system/kuchdesk-local-registry` mounts claim `kuchdesk-local-registry`; retained `kubedeck-local-registry` has separate ownership still to resolve | Map both claims and the localhost:5001/node recovery/pull path; prepare data and Host-forwarder handover before target deployment |
 
-Both cert-manager admission configurations point to `platform-system/cert-manager-webhook`, paths `/mutate` and `/validate`, port 443, with CA bundles present. Preserve verification and injection ownership. Six existing namespace-local `local-dev-tls` Certificates were Ready at the preceding inventory; preserve their deliveries. No next live migration is covered by the completed agent/k6 approvals. These findings are a dependency plan, not an approved final manifest or recovery proof.
+Both cert-manager admission configurations point to `platform-system/cert-manager-webhook`, paths `/mutate` and `/validate`, port 443, with CA bundles present. Preserve verification and injection ownership. Six existing namespace-local `local-dev-tls` Certificates were Ready at the preceding inventory; preserve their deliveries. This 08:14 inventory preceded the separately approved Traefik cutover. The completed agent/k6/Traefik approvals do not cover another live migration. Remaining findings are a dependency plan, not an approved final manifest or recovery proof.
 
 ## Verification-helper preservation
 

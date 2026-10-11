@@ -59,6 +59,7 @@ go run ./cmd/render-site
 SITE_CERT_NAME=$(go run ./cmd/render-site --get secretName)
 kubectl create namespace observability --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace platform-tests --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace platform-networking --dry-run=client -o yaml | kubectl apply -f -
 # Retain observability-tests for the existing k6 Helm release record.
 helm upgrade --install cert-manager cert-manager/cert-manager -n platform-system --create-namespace --version v1.21.0 -f apps/platform/cert-manager/values.yaml --wait
 if test -f .generated/manifests/00-selfsigned-issuer.json; then
@@ -73,7 +74,9 @@ for certificate in .generated/manifests/10-certificate-*.json; do kubectl apply 
 for namespace in $(go run ./cmd/render-site --get certificateNamespaces); do
   kubectl -n "$namespace" wait --for=condition=Ready "certificate/$SITE_CERT_NAME" --timeout=180s
 done
-helm upgrade --install traefik traefik/traefik -n platform-system --version 39.0.7 -f core/ingress/traefik-docker-desktop-values.yaml --wait
+# Helm metadata stays in platform-system; the reviewed renderer targets platform-networking.
+# See migrations/traefik-platform-networking/README.md before changing this workflow.
+./scripts/helm-traefik.sh upgrade --install traefik traefik/traefik -n platform-system --version 39.0.7 -f core/ingress/traefik-docker-desktop-values.yaml --wait
 kubectl apply -f .generated/manifests/20-default-tlsstore.json -f core/exposure/docker-desktop/traefik-lan.yaml
 helm upgrade --install infisical infisical-helm-charts/infisical -n platform-secrets --version 0.4.2 -f apps/platform/infisical/values.yaml -f .generated/infisical-values.json --wait
 kubectl apply -f apps/platform/infisical/manifests/https-redirect.yaml

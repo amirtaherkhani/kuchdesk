@@ -155,6 +155,21 @@ func TestDevelopmentDashboardPollingNeedsNoAdminReload(t *testing.T) {
 			if !strings.Contains(deployment, "name: grafana-init-sc-dashboard") {
 				t.Fatal("dashboard files must be collected before Grafana starts")
 			}
+			start := strings.Index(deployment, "- name: grafana-init-sc-dashboard")
+			init := deployment[start:]
+			end := strings.Index(init, "\n      containers:")
+			if end < 0 {
+				t.Fatal("dashboard watcher must be a native init sidecar")
+			}
+			init = init[:end]
+			for _, required := range []string{"restartPolicy: Always", "startupProbe:", "path: /healthz", "port: 8084", "name: METHOD\n              value: WATCH"} {
+				if !strings.Contains(init, required) {
+					t.Fatalf("native watcher startup contract missing: %s", required)
+				}
+			}
+			if strings.Contains(deployment, "- name: grafana-sc-dashboard") {
+				t.Fatal("native dashboard watcher must not be duplicated as a regular container")
+			}
 			for _, preserved := range []string{"name: GF_SECURITY_ADMIN_USER", "name: GF_SECURITY_ADMIN_PASSWORD", "key: GRAFANA_ADMIN_USER", "key: GRAFANA_ADMIN_PASSWORD"} {
 				if !strings.Contains(deployment, preserved) {
 					t.Fatalf("Grafana bootstrap mapping changed: %s", preserved)

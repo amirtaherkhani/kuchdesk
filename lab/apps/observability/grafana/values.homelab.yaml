@@ -243,6 +243,14 @@ sidecar:
     # No admin API reload call or sidecar bootstrap credentials are needed.
     skipReload: true
     initDashboards: true
+    restartPolicy: Always
+    startupProbe:
+      httpGet:
+        path: /healthz
+        port: 8084
+      periodSeconds: 2
+      timeoutSeconds: 1
+      failureThreshold: 60
     provider:
       name: sidecarProvider
       orgid: 1

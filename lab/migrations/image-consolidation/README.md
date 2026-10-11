@@ -29,3 +29,34 @@ The approved smoke test subsequently completed with one VU, one HTTP 200 request
 The installed controller is `controller-v1.5.0`, not a starter or load generator. Its [pinned starter source](https://github.com/grafana/k6-operator/blob/v1.5.0/pkg/resources/jobs/starter.go) defaults to `ghcr.io/grafana/k6-operator:latest-starter`; [runner](https://github.com/grafana/k6-operator/blob/v1.5.0/pkg/resources/jobs/runner.go) and [initializer](https://github.com/grafana/k6-operator/blob/v1.5.0/pkg/resources/jobs/initializer.go) default to `grafana/k6:latest`. Each accepts its own explicit `spec.*.image`. The installed CRD exposes all three fields. No TestRun or PrivateLoadZone existed at the audit.
 
 The existing [smoke TestRun](../../apps/observability/k6/tests/smoke-test.yaml) already pins initializer/runner `2.0.0` and starter `starter-v1.5.0` by digest. Preserve those pins and its k6 2.x control-API address. A bounded, separately approved run can verify this cohort before retiring alternate cached helpers. Clearing a cache does not change operator defaults: another TestRun that omits the fields can fetch mutable helpers again. A global admission rule or custom operator is a separate security/development proposal.
+
+## On-demand download of the three retired candidates
+
+The user explicitly accepted loss of the old Blackbox and alternate k6 rollback
+images. This applies only to the three exact digests in the download script;
+it does not authorize deleting Secrets, release history, current images or data.
+
+From the project root, download/verify their pinned publisher images in Docker:
+
+```sh
+python3 lab/scripts/download-retired-images.py
+```
+
+The script requires Python 3 and Docker, uses the observed `desktop-linux`
+context, and never removes images, overwrites mutable tags, deploys workloads,
+changes credentials or resets storage. It restores linux/arm64, including the
+observed Blackbox v8 variant. It skips already complete exact images, verifies
+Docker content using an auto-removed temporary save, and fails if required
+registry bytes cannot be retrieved. Availability is not guaranteed indefinitely.
+
+Add `--node desktop-control-plane` to populate and verify that explicitly selected
+existing KIND node's separate containerd/CRI store. No KIND CLI or guessed
+cluster name is used. Node restoration preserves the normal transfer verifier
+policy, fetches missing compressed content only when necessary, and verifies
+the original config ID, repository digest, platform and complete content.
+It does not rely on Host cache presence to satisfy the node store.
+
+Use `--plan` for a preview without Docker calls, or `--verify-only` to inspect
+existing content without any download. Run separate script invocations serially.
+This is an optional recovery tool; normal current deployments do not need these
+old images restored.

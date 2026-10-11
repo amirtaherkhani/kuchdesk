@@ -37,6 +37,14 @@ func (r *countingRunner) Output(_ context.Context, _ string, name string, args .
 	if name == "git" && args[0] == "status" {
 		return nil, nil
 	}
+	if name == "docker" && args[0] == "image" {
+		if args[1] == "ls" {
+			return nil, nil
+		}
+		if len(args) == 3 {
+			return nil, os.ErrNotExist
+		}
+	}
 	return []byte(`["localhost:5001/kuchdesk-agent@sha256:` + strings.Repeat("a", 64) + `"]`), nil
 }
 

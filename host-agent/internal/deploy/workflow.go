@@ -16,33 +16,40 @@ import (
 )
 
 var (
-	namePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
-	contextPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$`)
-	imagePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]+$`)
-	tagPattern     = regexp.MustCompile(`^git-[0-9a-f]{12}$`)
-	digestPattern  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	namePattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
+	contextPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$`)
+	imagePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]+$`)
+	tagPattern      = regexp.MustCompile(`^git-[0-9a-f]{12}$`)
+	platformPattern = regexp.MustCompile(`^linux/(amd64|arm64|arm|386|ppc64le|s390x|riscv64)(/v[0-9]+)?$`)
+	buildArgPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	digestPattern   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // Spec is one explicit, local deployment target. No command or shell string is
 // accepted from the profile; the workflow owns the Docker, Helm, and kubectl
 // argument lists.
 type Spec struct {
-	SourceDir            string   `json:"sourceDir"`
-	Dockerfile           string   `json:"dockerfile"`
-	ChartDir             string   `json:"chartDir"`
-	ValuesFiles          []string `json:"valuesFiles,omitempty"`
-	ImageRepository      string   `json:"imageRepository"`
-	ImageTag             string   `json:"imageTag"`
-	KubeContext          string   `json:"kubeContext"`
-	Namespace            string   `json:"namespace"`
-	Release              string   `json:"release"`
-	Deployment           string   `json:"deployment"`
-	Test                 string   `json:"test"`
-	PushMode             string   `json:"pushMode,omitempty"`
-	HostPushRepo         string   `json:"hostPushRepository,omitempty"`
-	KindPrepull          bool     `json:"kindPrepull,omitempty"`
-	PreflightDomain      string   `json:"preflightDomain"`
-	PreflightRegistryURL string   `json:"preflightRegistryUrl"`
+	SourceDir            string            `json:"sourceDir"`
+	Dockerfile           string            `json:"dockerfile"`
+	ChartDir             string            `json:"chartDir"`
+	ValuesFiles          []string          `json:"valuesFiles,omitempty"`
+	ImageRepository      string            `json:"imageRepository"`
+	ImageTag             string            `json:"imageTag"`
+	KubeContext          string            `json:"kubeContext"`
+	Namespace            string            `json:"namespace"`
+	Release              string            `json:"release"`
+	Deployment           string            `json:"deployment"`
+	Test                 string            `json:"test"`
+	PushMode             string            `json:"pushMode,omitempty"`
+	HostPushRepo         string            `json:"hostPushRepository,omitempty"`
+	KindPrepull          bool              `json:"kindPrepull,omitempty"`
+	Platform             string            `json:"platform,omitempty"`
+	BuildArgs            map[string]string `json:"buildArgs,omitempty"`
+	ReuseBuild           bool              `json:"reuseBuild,omitempty"`
+	Rebuild              bool              `json:"rebuild,omitempty"`
+	RefreshImages        bool              `json:"refreshImages,omitempty"`
+	PreflightDomain      string            `json:"preflightDomain"`
+	PreflightRegistryURL string            `json:"preflightRegistryUrl"`
 }
 
 type Result struct {
@@ -89,9 +96,10 @@ func filteredEnvironment() []string {
 }
 
 type Workflow struct {
-	Runner    Runner
-	OnStep    func(string)
-	Preflight Preflight
+	Runner          Runner
+	OnStep          func(string)
+	Preflight       Preflight
+	BuildReceiptDir string // Empty uses the current user's cache directory.
 }
 
 func (s Spec) Validate() error {
@@ -100,6 +108,14 @@ func (s Spec) Validate() error {
 	}
 	if !imagePattern.MatchString(s.ImageRepository) || !tagPattern.MatchString(s.ImageTag) || strings.HasSuffix(s.ImageRepository, ":") {
 		return errors.New("image repository and immutable git tag are required")
+	}
+	if s.Platform != "" && !platformPattern.MatchString(s.Platform) {
+		return errors.New("platform must name one explicit Linux OS/architecture[/variant]")
+	}
+	for key, value := range s.BuildArgs {
+		if !buildArgPattern.MatchString(key) || strings.ContainsRune(value, '\x00') {
+			return errors.New("build argument name or value invalid")
+		}
 	}
 	if s.PushMode != "" && s.PushMode != "docker" && s.PushMode != "host-crane" {
 		return errors.New("pushMode must be docker or host-crane")
@@ -167,7 +183,15 @@ func (s Spec) Plan() ([]string, error) {
 	if s.Test == "go" {
 		steps = append(steps, "go test")
 	}
-	steps = append(steps, "docker build")
+	steps = append(steps, "check local immutable image tag")
+	if s.ReuseBuild {
+		steps = append(steps, "reuse eligible Docker build or docker build --pull")
+	} else {
+		steps = append(steps, "docker build --pull")
+	}
+	if s.Rebuild || s.RefreshImages {
+		steps[len(steps)-1] += " --no-cache"
+	}
 	if s.PushMode == "host-crane" {
 		steps = append(steps, "docker save", "crane push", "crane digest")
 	} else {
@@ -244,7 +268,7 @@ func (w Workflow) Apply(ctx context.Context, s Spec) (Result, error) {
 		}
 	}
 	image := s.ImageRepository + ":" + s.ImageTag
-	if err := w.run(ctx, s.SourceDir, "docker build", "docker", "build", "--file", s.Dockerfile, "--tag", image, s.SourceDir); err != nil {
+	if err := w.buildImage(ctx, s, image); err != nil {
 		return Result{}, err
 	}
 	var digest string
@@ -336,14 +360,7 @@ func (w Workflow) prepullKind(ctx context.Context, spec Spec, image string) erro
 		if !namePattern.MatchString(name) {
 			return errors.New("KIND node name invalid")
 		}
-		// On this Docker Desktop KIND runtime, CRI's direct digest fetch can
-		// short-read a registry manifest after HEAD. Fetch the exact digest via
-		// containerd first, then require CRI to register the same reference for
-		// kubelet's imagePullPolicy=Never path.
-		if err := w.run(ctx, spec.SourceDir, "fetch digest through KIND containerd", "docker", "exec", name, "ctr", "-n", "k8s.io", "images", "pull", "--plain-http", image); err != nil {
-			return err
-		}
-		if err := w.run(ctx, spec.SourceDir, "register digest with KIND CRI", "docker", "exec", name, "crictl", "pull", image); err != nil {
+		if err := w.ensureKindImage(ctx, spec, name, image); err != nil {
 			return err
 		}
 	}

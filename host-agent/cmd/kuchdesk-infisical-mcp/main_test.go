@@ -410,6 +410,14 @@ func (deployCommandRunner) Output(_ context.Context, _ string, name string, args
 		return nil, nil
 	}
 	if name == "docker" && args[0] == "image" {
+		if args[1] == "ls" {
+			return nil, nil
+		}
+		if len(args) == 3 {
+			return nil, os.ErrNotExist
+		}
+	}
+	if name == "docker" && args[0] == "image" {
 		return []byte(`["localhost:5001/kuchdesk-agent@sha256:` + strings.Repeat("a", 64) + `"]`), nil
 	}
 	return nil, os.ErrInvalid

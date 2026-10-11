@@ -54,7 +54,7 @@ func runWithPreflight(args []string, stdout, stderr io.Writer, runner deploy.Run
 		return 2
 	}
 	if !*apply {
-		if err := json.NewEncoder(stdout).Encode(map[string]any{"release": spec.Release, "namespace": spec.Namespace, "kubeContext": spec.KubeContext, "sourceDir": spec.SourceDir, "chartDir": spec.ChartDir, "valuesFiles": spec.ValuesFiles, "deployment": spec.Deployment, "image": spec.ImageRepository + ":" + spec.ImageTag, "pushMode": spec.PushMode, "hostPushRepository": spec.HostPushRepo, "kindPrepull": spec.KindPrepull, "preflightDomain": spec.PreflightDomain, "preflightRegistryUrl": spec.PreflightRegistryURL, "steps": steps}); err != nil {
+		if err := json.NewEncoder(stdout).Encode(map[string]any{"release": spec.Release, "namespace": spec.Namespace, "kubeContext": spec.KubeContext, "sourceDir": spec.SourceDir, "chartDir": spec.ChartDir, "valuesFiles": spec.ValuesFiles, "deployment": spec.Deployment, "image": spec.ImageRepository + ":" + spec.ImageTag, "pushMode": spec.PushMode, "hostPushRepository": spec.HostPushRepo, "kindPrepull": spec.KindPrepull, "platform": spec.Platform, "buildArgs": spec.BuildArgs, "reuseBuild": spec.ReuseBuild, "rebuild": spec.Rebuild, "refreshImages": spec.RefreshImages, "preflightDomain": spec.PreflightDomain, "preflightRegistryUrl": spec.PreflightRegistryURL, "steps": steps}); err != nil {
 			fmt.Fprintln(stderr, "write plan failed")
 			return 1
 		}

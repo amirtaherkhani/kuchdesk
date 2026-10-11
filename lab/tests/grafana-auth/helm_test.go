@@ -139,3 +139,51 @@ func TestProjectDashboardsKeepOnePlatformDirectory(t *testing.T) {
 		t.Fatal("relative annotation would nest Platform twice after changing the default sidecar directory")
 	}
 }
+
+func TestDevelopmentDashboardPollingNeedsNoAdminReload(t *testing.T) {
+	for _, profile := range []string{"values.homelab.yaml", "values.development.yaml"} {
+		t.Run(profile, func(t *testing.T) {
+			deployment, err := renderWithProfile(t, profile, "templates/deployment.yaml")
+			if err != nil {
+				t.Fatal(err, deployment)
+			}
+			for _, forbidden := range []string{"name: REQ_URL", "name: REQ_USERNAME", "name: REQ_PASSWORD", "name: REQ_METHOD"} {
+				if strings.Contains(deployment, forbidden) {
+					t.Fatalf("dashboard polling still depends on admin reload: %s", forbidden)
+				}
+			}
+			if !strings.Contains(deployment, "name: grafana-init-sc-dashboard") {
+				t.Fatal("dashboard files must be collected before Grafana starts")
+			}
+			start := strings.Index(deployment, "- name: grafana-init-sc-dashboard")
+			init := deployment[start:]
+			end := strings.Index(init, "\n      containers:")
+			if end < 0 {
+				t.Fatal("dashboard watcher must be a native init sidecar")
+			}
+			init = init[:end]
+			for _, required := range []string{"restartPolicy: Always", "startupProbe:", "path: /healthz", "port: 8084", "name: METHOD\n              value: WATCH"} {
+				if !strings.Contains(init, required) {
+					t.Fatalf("native watcher startup contract missing: %s", required)
+				}
+			}
+			if strings.Contains(deployment, "- name: grafana-sc-dashboard") {
+				t.Fatal("native dashboard watcher must not be duplicated as a regular container")
+			}
+			for _, preserved := range []string{"name: GF_SECURITY_ADMIN_USER", "name: GF_SECURITY_ADMIN_PASSWORD", "key: GRAFANA_ADMIN_USER", "key: GRAFANA_ADMIN_PASSWORD"} {
+				if !strings.Contains(deployment, preserved) {
+					t.Fatalf("Grafana bootstrap mapping changed: %s", preserved)
+				}
+			}
+			provider, err := renderWithProfile(t, profile, "templates/configmap-dashboard-provider.yaml")
+			if err != nil {
+				t.Fatal(err, provider)
+			}
+			for _, required := range []string{"updateIntervalSeconds: 30", "path: /tmp/dashboards", "foldersFromFilesStructure: true", "allowUiUpdates: false"} {
+				if !strings.Contains(provider, required) {
+					t.Fatalf("automatic file polling contract missing: %s", required)
+				}
+			}
+		})
+	}
+}

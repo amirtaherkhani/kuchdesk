@@ -100,10 +100,22 @@ and a nonempty panel. Fresh-install acceptance used a non-destructive render;
 no live database was wiped for validation.
 
 One additional UID-guarded ConfigMap fixture verified automatic file-provider
-create/update/removal through the existing 30-second poll without a Pod restart.
-The sidecar's explicit admin provisioning-reload request still returns HTTP 403;
-this warning did not prevent the polling test. No password, credential Secret
-or Infisical authentication changes were used to repair that request.
+create/update/removal through the 30-second poll without a Pod restart.
+Both development profiles use the chart's supported `skipReload: true` and
+`initDashboards: true` with `restartPolicy: Always`: a native sidecar collects
+files before Grafana starts, then keeps watching ConfigMaps. Its `/healthz`
+startup probe succeeds only after initial collection finishes. This requires
+Kubernetes native-sidecar support (verified on the live `v1.36.1` server).
+The watcher writes changed files for the provider's explicit 30-second
+poll. The dashboard sidecar no longer sends an admin provisioning-reload request
+or receives admin reload credentials. Grafana's own bootstrap Secret mapping
+and Infisical authentication/ownership stay unchanged. This removes the reload
+call that returned HTTP 403 without granting more access or changing passwords.
+
+The pinned [sidecar initial-sync implementation](https://github.com/kiwigrid/k8s-sidecar/blob/2.8.1/src/sidecar.py#L123)
+and [health endpoint](https://github.com/kiwigrid/k8s-sidecar/blob/2.8.1/src/healthz.py#L42)
+define this startup gate; the chart's native sidecar configuration is documented
+in its vendored `values.yaml`.
 
 Regression checks:
 

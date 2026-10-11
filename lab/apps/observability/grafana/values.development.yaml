@@ -22,6 +22,17 @@ sidecar:
     labelValue: "1"
     defaultFolderName: Platform
     folderAnnotation: grafana_folder
+    skipReload: true
+    initDashboards: true
+    restartPolicy: Always
+    startupProbe:
+      httpGet:
+        path: /healthz
+        port: 8084
+      periodSeconds: 2
+      timeoutSeconds: 1
+      failureThreshold: 60
     provider:
       allowUiUpdates: false
       foldersFromFilesStructure: true
+      updateIntervalSeconds: 30

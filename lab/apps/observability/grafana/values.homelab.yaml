@@ -239,6 +239,10 @@ sidecar:
     # there automatically. Explicit grafana_folder annotations still win.
     defaultFolderName: Platform
     folderAnnotation: grafana_folder
+    # Collect files before startup; later updates use Grafana's file poll.
+    # No admin API reload call or sidecar bootstrap credentials are needed.
+    skipReload: true
+    initDashboards: true
     provider:
       name: sidecarProvider
       orgid: 1
@@ -246,3 +250,4 @@ sidecar:
       disableDelete: false
       allowUiUpdates: false
       foldersFromFilesStructure: true
+      updateIntervalSeconds: 30

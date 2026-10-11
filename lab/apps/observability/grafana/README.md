@@ -100,10 +100,14 @@ and a nonempty panel. Fresh-install acceptance used a non-destructive render;
 no live database was wiped for validation.
 
 One additional UID-guarded ConfigMap fixture verified automatic file-provider
-create/update/removal through the existing 30-second poll without a Pod restart.
-The sidecar's explicit admin provisioning-reload request still returns HTTP 403;
-this warning did not prevent the polling test. No password, credential Secret
-or Infisical authentication changes were used to repair that request.
+create/update/removal through the 30-second poll without a Pod restart.
+Both development profiles use the chart's supported `skipReload: true` and
+`initDashboards: true`: an init container collects files before Grafana starts,
+then the watcher writes changed files for the provider's explicit 30-second
+poll. The dashboard sidecar no longer sends an admin provisioning-reload request
+or receives admin reload credentials. Grafana's own bootstrap Secret mapping
+and Infisical authentication/ownership stay unchanged. This removes the reload
+call that returned HTTP 403 without granting more access or changing passwords.
 
 Regression checks:
 

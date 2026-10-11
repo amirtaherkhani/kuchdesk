@@ -10,6 +10,14 @@ Host Docker and node containerd are separate stores. The node has a Docker volum
 
 Docker returned 47 image objects. Multiple tags/digest aliases on the same object are not physical duplicates: for example `grafana/alloy:latest` and `grafana/alloy:v1.20.1` share Docker ID `sha256:2aa2099af76c0098d4af7a4d6e48f86cb66dc1a000222ad927a1c67c6542d13f`. Removing one alias does not reclaim an independently sized image. Separate image objects can still share almost every layer.
 
+## Screenshot comparison, fresh engine read
+
+After the user reported repeated Alloy rows, a fresh engine `/system/df` read returned **47 image records and 47 distinct IDs**. Alloy `sha256:4f6ddc56ffdcf8a6316748fc5162972e20cb301523cac1bb4a31957df733ae9b` occurred once, with two aliases: `grafana/alloy:v1.17.1` and `grafana/alloy:v1.17.1@sha256:4f6ddc56ffdcf8a6316748fc5162972e20cb301523cac1bb4a31957df733ae9b`. Its logical size is 685,223,407 bytes. Repeated UI rows are not evidence of ten separately stored image objects; no particular UI/cache defect was diagnosed.
+
+The live Alloy DaemonSet still requests `docker.io/grafana/alloy:v1.17.1`, so preserve that image. `latest` and `v1.20.1` share the separate `2aa2099a…` object, as recorded above; neither tag establishes a successful upgrade. The active node is `kindest/node:v1.36.1`, Docker ID `3489c767…`. The visible `kindest/node:v1.37.0` object `sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5` is a system image outside the bounded KuchDesk-agent cleanup set. No Alloy or node upgrade/removal is authorized by this comparison.
+
+All nine visible KuchDesk-agent Docker objects remain, with their exact recovery reasons below. This is intentional retained state; refreshing the UI is not expected to remove them. The bounded lane is complete with retained items, not an image-cleanup process waiting to finish.
+
 ## Exact project Docker objects
 
 These are **potential review candidates**, not approved removals. Preserve the current `git-8c1d9ab3de4a` object. The remaining eight old project objects have zero Docker container references in `/system/df` and no corresponding old desired Kubernetes image was found. Recovery and health gates still apply.

@@ -165,7 +165,7 @@ is one JSON object with absolute `sourceDir`, `dockerfile`, and `chartDir`
 paths, optional absolute `valuesFiles`, `imageRepository`, a 12-hex-commit
 `imageTag` such as `git-123456789abc`, `kubeContext`, `namespace`, `release`,
 `deployment`, and `test` (`go` or empty). Dockerfile and chart must be inside
-the clean Git source tree. The Git tag must match that source's HEAD. The CLI
+the clean Git source tree. The image build tag must match that source's HEAD. The CLI
 also requires `preflightDomain` (a host-resolvable DNS name) and
 `preflightRegistryUrl` (a loopback registry origin). For the `host-crane`
 profile, the registry URL must point to the local port 5001.
@@ -177,6 +177,48 @@ values in Helm release metadata.
 
 For the KuchDesk agent chart, a values file must also provide `cluster.id`
 and `cluster.name`; the workflow supplies image repository, tag, and digest.
+
+### Image versions
+
+Every project-built service image needs an explicit, traceable build version.
+Reuse this workflow's existing `git-<12-hex-source-commit>` convention; it rejects
+`latest` and requires the tag to match the clean build source's HEAD. Record the
+full source commit and the service's declared application/release version as
+separate fields. The current agent declares app version `0.10.0`; chart package
+version `0.13.0` is not its image version. This guidance does not create a release
+or change either version.
+
+From the profile's actual source directory, derive the existing image tag:
+
+```sh
+SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+IMAGE_TAG="git-$(git -C "$SOURCE_DIR" rev-parse --short=12 HEAD)"
+```
+
+Before building or pushing, inspect the exact local and destination-registry
+tag. An existing immutable tag must keep its original content: reuse its
+verified digest through a supported deployment route, or stop. A failed lookup
+is not evidence of absence; distinguish confirmed absence from connection,
+authentication and authorization failures. Never overwrite the tag with a
+different image, including a rebuild with changed base images or build inputs.
+Commit those changed inputs before deriving another build version. Do not add a
+timestamp, SemVer suffix or new release tag that this CLI does not support.
+
+The CLI currently checks source/tag agreement and digest pinning; it does not
+automatically enforce registry tag immutability or support reuse without its
+build/push steps. The collision check is a required operator gate before
+`-apply`; do not use that path when the tag already exists. Registry enforcement
+must be verified separately. For upstream service images, preserve their
+publisher's explicit version and digest rather than relabelling them as a local
+build.
+
+Record the image repository/tag, source commit, declared service version,
+platform, build inputs and resolved registry/deployed digest. Keep host Docker
+index IDs, platform manifests and node CRI config IDs distinct. After verified
+health, follow the [completion rule](../docs/deployment-completion.md): retain
+the latest successful local version per service/store/platform and remove only
+unused predecessors with verified pinned recovery. Tags sharing a digest are
+one object; protect active/shared/system and unique unrecoverable content.
 
 The migrated home-lab agent runs in `platform-tools`, while Helm metadata stays
 in `development-tools`. This generic workflow lacks the required post-renderer

@@ -20,6 +20,36 @@ def dashboard_content(spec):
     return {key: value for key, value in spec.items() if key not in ("id", "version", "uid")}
 
 
+def requested_fields_match(existing, desired):
+    if isinstance(desired, dict):
+        return isinstance(existing, dict) and all(
+            key in existing and requested_fields_match(existing[key], value)
+            for key, value in desired.items())
+    if isinstance(desired, list):
+        return isinstance(existing, list) and len(existing) == len(desired) and all(
+            requested_fields_match(old, new) for old, new in zip(existing, desired))
+    return existing == desired
+
+
+def requested_content(spec, existing):
+    desired = dashboard_content(spec)
+    # Grafana migrates older exports forward on save. Never downgrade a saved
+    # schema revision; all explicitly supplied dashboard content stays checked.
+    if isinstance(desired.get("schemaVersion"), int) and isinstance(existing.get("schemaVersion"), int) and existing["schemaVersion"] >= desired["schemaVersion"]:
+        desired.pop("schemaVersion")
+    return desired
+
+
+def overlay_fields(existing, desired):
+    result = copy.deepcopy(existing)
+    for key, value in desired.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = overlay_fields(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
 def checked(status, accepted):
     if status not in accepted:
         raise RuntimeError(f"Grafana request denied or failed (HTTP {status}); existing access is required")
@@ -86,8 +116,15 @@ def apply_dashboard(request, payload):
     checked(status, (200,))
     if legacy.get("meta", {}).get("provisioned"):
         raise RuntimeError("Dashboard is file-provisioned; update its source ConfigMap instead")
-    if isinstance(existing.get("spec"), dict) and dashboard_content(existing["spec"]) == dashboard_content(payload["spec"]):
+    if not isinstance(existing.get("spec"), dict):
+        raise RuntimeError("Existing dashboard content is invalid; no dashboard changed")
+    desired = requested_content(payload["spec"], existing["spec"])
+    if requested_fields_match(existing["spec"], desired):
         return "unchanged"
+    # Preserve fields omitted from the source, including defaults added by
+    # Grafana. Explicit arrays (including []) replace their saved counterparts.
+    payload["spec"] = overlay_fields(dashboard_content(existing["spec"]), desired)
+    payload["spec"]["uid"] = uid
     metadata["resourceVersion"] = existing["metadata"]["resourceVersion"]
     # Keep current annotations rather than deleting unrelated dashboard metadata.
     metadata["annotations"] = {**existing["metadata"].get("annotations", {}), **annotations}

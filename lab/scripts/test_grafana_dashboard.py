@@ -76,6 +76,18 @@ class DashboardRoutingTests(unittest.TestCase):
         self.assertEqual(module.apply_dashboard(api, exported), "updated")
         self.assertEqual(exported["version"], 4)
 
+    def test_server_defaults_and_schema_migration_do_not_force_rewrites(self):
+        api = GrafanaAPI()
+        self.payload["spec"]["schemaVersion"] = 41
+        module.apply_dashboard(api, self.payload)
+        api.dashboard["spec"].update(schemaVersion=42, timezone="", time={"from": "now-6h", "to": "now"}, annotations={"list": [{"builtIn": 1}]})
+        self.assertEqual(module.apply_dashboard(api, self.payload), "unchanged")
+        self.payload["spec"]["title"] = "Changed requested title"
+        self.assertEqual(module.apply_dashboard(api, self.payload), "updated")
+        self.assertEqual(api.dashboard["spec"]["schemaVersion"], 42)
+        self.assertEqual(api.dashboard["spec"]["time"]["from"], "now-6h")
+        self.assertEqual(module.apply_dashboard(api, self.payload), "unchanged")
+
     def test_existing_folder_creation_race_reuses_winner(self):
         api = GrafanaAPI(folder=False, collision=True)
         self.assertEqual(module.apply_dashboard(api, self.payload), "created")

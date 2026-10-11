@@ -75,6 +75,11 @@ resource. It resolves the existing Platform UID by title, creates that folder
 idempotently if absent using Grafana's ordinary folder defaults, and defaults
 `metadata.annotations["grafana.app/folder"]` to the resolved UID. Reapplying the
 same dashboard skips the write; edits use the current resource version. It
+reconciles fields supplied in the source, preserves omitted/default fields,
+and keeps schema migrations performed by Grafana. Explicit arrays, including
+empty arrays, replace their saved values. Exported storage IDs and revisions
+are ignored.
+It
 refuses to move existing General/other-folder dashboards, override another
 folder annotation, or update source-provisioned dashboards. Requests are
 anonymous with trusted TLS; there is no admin-credential or ACL fallback. A

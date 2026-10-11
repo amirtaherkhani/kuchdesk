@@ -17,6 +17,8 @@ spec.loader.exec_module(module)
 
 @unittest.skipUnless(os.environ.get("KUCHDESK_GRAFANA_ACCEPTANCE_URL"), "explicit acceptance URL required; no live changes by default")
 class AnonymousAcceptance(unittest.TestCase):
+    maxDiff = None
+
     def test_create_read_edit_reapply_and_cleanup(self):
         request = module.anonymous_request(os.environ["KUCHDESK_GRAFANA_ACCEPTANCE_URL"])
         self.assertEqual(request("GET", "/api/user")[0], 401)
@@ -31,6 +33,7 @@ class AnonymousAcceptance(unittest.TestCase):
             status, body = request("GET", path)
             self.assertEqual(status, 200)
             self.assertTrue(body["metadata"]["annotations"]["grafana.app/folder"])
+            self.assertTrue(module.requested_fields_match(body["spec"], module.requested_content(payload["spec"], body["spec"])))
             self.assertEqual(module.apply_dashboard(request, payload), "unchanged")
             payload["spec"]["title"] += " edited"
             self.assertEqual(module.apply_dashboard(request, payload), "updated")

@@ -413,7 +413,11 @@ func (w Workflow) kindImagePresent(ctx context.Context, s Spec, node, image stri
 	if !matched {
 		return false
 	}
-	raw, err = w.Runner.Output(ctx, s.SourceDir, "docker", "exec", node, "ctr", "-n", "k8s.io", "images", "check", "--quiet")
+	return w.kindImageContentPresent(ctx, s, node, image)
+}
+
+func (w Workflow) kindImageContentPresent(ctx context.Context, s Spec, node, image string) bool {
+	raw, err := w.Runner.Output(ctx, s.SourceDir, "docker", "exec", node, "ctr", "-n", "k8s.io", "images", "check", "--quiet", "name=="+image)
 	if err != nil {
 		return false
 	}
@@ -443,6 +447,15 @@ func (w Workflow) ensureKindImage(ctx context.Context, s Spec, node, image strin
 	}
 	if err := w.run(ctx, s.SourceDir, "fetch digest through KIND containerd", "docker", append(args, image)...); err != nil {
 		return err
+	}
+	// Retain the normal transfer pull (including its verifier policy). Its
+	// unpacker may skip compressed blobs for existing snapshots. Only when the
+	// exact reference is still incomplete, fetch the same pinned content before
+	// CRI registration; never weaken the complete-content reuse/post-pull gate.
+	if s.Platform != "" && pinnedReference(image) && !w.kindImageContentPresent(ctx, s, node, image) {
+		if err := w.run(ctx, s.SourceDir, "restore incomplete KIND content", "docker", "exec", node, "ctr", "-n", "k8s.io", "content", "fetch", "--plain-http", "--platform", s.Platform, image); err != nil {
+			return err
+		}
 	}
 	if err := w.run(ctx, s.SourceDir, "register digest with KIND CRI", "docker", "exec", node, "crictl", "pull", image); err != nil {
 		return err

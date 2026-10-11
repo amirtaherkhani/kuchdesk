@@ -286,7 +286,13 @@ OS/architecture/variant, and `ctr -n k8s.io images check --quiet` must show
 complete content for the requested reference. Host Docker presence cannot
 satisfy either node inventory. Missing/mismatching/unknown node evidence runs
 the existing `ctr` plus CRI pull steps, with an explicit containerd platform,
-and the helper verifies the digest/platform/content again before Helm. With an
+and the helper verifies the digest/platform/content again before Helm. The
+normal transfer pull retains its configured verifier policy. If the exact
+pinned reference is still incomplete afterward, a guarded `ctr content fetch`
+restores its compressed content before CRI registration. This handles existing
+unpacked snapshots whose compressed blobs are absent; the shared node/image
+lock covers the repair as well. No global containerd or security setting changes.
+With an
 implicit platform, or a mutable reference, it retains the fresh pull path.
 `refreshImages` bypasses these reuse checks. KIND reuse is independent of
 `reuseBuild`; this helper creates no host Docker upstream-pull cache.
@@ -300,7 +306,21 @@ changed inputs, immutable collisions, absent/unknown images, platform/variant
 mismatches, per-node content, concurrent calls, explicit bypass, preserved-label
 image replacement, daemon identity, missing/corrupt/private receipt metadata,
 frontend selector variants and implicit/explicit proxy inputs. These tests
-are source verification; no new live Docker/KIND acceptance is claimed.
+are source verification. Separately authorized [bounded live acceptance](../docs/observability-source-acceptance-2026-10-11.md#bounded-live-image-reuse-acceptance)
+uses real helpers and ExecRunner with tiny scratch inputs, retained receipts,
+and the exact existing agent digest. It applies no Helm release, starts no
+container, changes no access, and removes no image. The opt-in tests
+`TestLiveImageReuseAcceptance` and `TestLiveReuseResumeAcceptance` skip by
+default. They require `KUCHDESK_LIVE_IMAGE_ACCEPTANCE=confirm-scratch-builds-and-current-agent-pull`,
+an absolute `KUCHDESK_LIVE_IMAGE_ARTIFACT_DIR`, the explicitly approved
+`KUCHDESK_LIVE_KIND_NODE` and pinned `KUCHDESK_LIVE_KIND_IMAGE`; resume also
+requires the retained `KUCHDESK_LIVE_FIXTURE_SOURCE`. Run only the selected
+live test under `go test -race -count=1 ./internal/deploy -run '^TestLiveImageReuseAcceptance$' -v`
+after confirming the current node/image scope. The initial test allows at most
+two builds; resume refuses every build. Both limit each required node operation
+to one per run. All fixtures and images remain for evidence/recovery. This
+does not replace the migrated agent's deployment renderer or authorize runtime
+service installation/restarts.
 
 Record the image repository/tag, source commit, declared service version,
 platform, build inputs and resolved registry/deployed digest. Keep host Docker

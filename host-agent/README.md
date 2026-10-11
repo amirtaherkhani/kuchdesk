@@ -225,26 +225,53 @@ Do not place credentials in build arguments or image labels.
 Every build first inspects its exact local tag. If inspection fails, a
 successful exact-tag Docker inventory must confirm absence; unavailable or
 contradictory evidence blocks the build. A known existing immutable tag is
-reused only with an eligible matching fingerprint and actual platform/config
-ID. Otherwise apply stops with a collision error, including explicit rebuild
+reused only with an eligible matching fingerprint, actual platform/store image
+ID and a matching trusted build receipt. Otherwise apply stops with a collision
+error, including explicit rebuild
 or refresh of an already tagged image. For changed inputs, commit those inputs
 and derive the resulting `git-<12-hex-source-commit>` tag; rebuild only a
 confirmed absent target. This local gate does not prove registry absence.
 
 Eligible opt-in builds hash the full local context's names, modes and bytes
 (including dependency/lock/config files and ignored files), Dockerfile path,
-explicit arguments, platform, offline network configuration, explicit Docker context builder and Docker/BuildKit
-setting, Docker server configuration and verified base configurations. The
+explicit arguments, platform, offline network configuration, explicit Docker
+context builder and Docker/BuildKit settings, Docker server configuration and
+verified base configurations. The
 fingerprint is recorded on the built image as
-`io.kuchdesk.build-fingerprint.v1`. Bases must be `scratch`, verified pinned
-local digest/platform artifacts without inherited `ONBUILD`, or earlier
-stages. Reuse disables for mutable or unavailable bases, custom frontends,
-remote `ADD`/external `COPY`, build mounts, line continuations, symlinks,
-special files, an implicit platform or a `DOCKER_HOST` endpoint override. This deliberately narrow Dockerfile
-subset avoids guessing at external dependencies. Eligible builds require BuildKit and run with
-`--builder <Docker-context> --network none`; dependencies must already be in the context/base, such as
-vendored Go modules. A failed offline build remains a failure and is never
-silently retried with network access.
+`io.kuchdesk.build-fingerprint.v1`. After a successful build, the helper verifies
+the actual image ID, platform and label, then atomically records a small receipt
+in the current user's OS cache under `kuchdesk/build-receipts` (0700 directory,
+0600 files). The receipt binds the proven Docker context and daemon ID, image
+reference, platform and fingerprint to the exact store image ID. Reuse must
+match that ID independently of the image's copied or inherited labels. Missing,
+corrupt, overly permissive or symlink receipt metadata blocks reuse of an
+existing tag; old images are never adopted from their labels alone. Receipt
+write or post-build identity verification failures stop apply before push.
+These receipts contain metadata only, and are kept outside the build context.
+They rely on the current user's private cache ownership; they are not signed
+provenance or image backups. Docker store image IDs may identify root/index or
+config objects; they are not treated as registry digests or KIND CRI IDs.
+
+Bases must be `scratch`, verified pinned local digest/platform artifacts
+without inherited `ONBUILD`, or earlier stages. Reuse disables for mutable or
+unavailable bases, custom frontends selected by
+case/whitespace-normalized `syntax`/`escape` directives or an explicit
+`BUILDKIT_SYNTAX` argument, remote `ADD`/external `COPY`, build mounts, line continuations, symlinks,
+special files, an implicit platform or a `DOCKER_HOST` endpoint override. This
+deliberately narrow Dockerfile subset avoids guessing at external dependencies.
+Eligible builds require BuildKit and run with
+`--builder <Docker-context> --network none`; dependencies must already be in
+the context/base, such as vendored Go modules. Eligible offline builds explicitly provide every
+predefined proxy argument (`HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, `NO_PROXY`,
+`ALL_PROXY` and their lowercase variants), defaulting unspecified values to
+empty while preserving operator-supplied values. These effective arguments are
+fingerprinted, so Docker's implicit client-config proxies cannot alter the
+build. The helper does not read credential-bearing Docker client config;
+default fresh builds retain normal client-config behavior. See Docker's
+[frontend selectors](https://docs.docker.com/build/buildkit/frontend/) and
+[proxy configuration](https://docs.docker.com/engine/cli/proxy/) documentation.
+A failed offline build remains a failure and is never silently retried with
+network access.
 
 The current agent Dockerfile uses a mutable Go base, a mutable syntax frontend
 and cache mounts, so it remains ineligible. For a confirmed absent tag, fresh
@@ -270,7 +297,9 @@ processes require operator serialization. Helm lint/tests, Doctor checks,
 push/digest resolution, Helm upgrade and rollout checks still run; the current
 namespace limitation below still applies. Fake-store tests cover reuse,
 changed inputs, immutable collisions, absent/unknown images, platform/variant
-mismatches, per-node content, concurrent calls and explicit bypass. These tests
+mismatches, per-node content, concurrent calls, explicit bypass, preserved-label
+image replacement, daemon identity, missing/corrupt/private receipt metadata,
+frontend selector variants and implicit/explicit proxy inputs. These tests
 are source verification; no new live Docker/KIND acceptance is claimed.
 
 Record the image repository/tag, source commit, declared service version,

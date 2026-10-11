@@ -13,12 +13,15 @@ import (
 
 // Persistent fake stores at the real Runner seam; no image executable runs.
 type imageStoreRunner struct {
-	mu            sync.Mutex
-	docker, cri   map[string][]byte
-	ready         map[string]bool
-	builds, pulls map[string]int
-	buildArgs     []string
-	engine        string
+	mu               sync.Mutex
+	docker, cri      map[string][]byte
+	ready            map[string]bool
+	builds, pulls    map[string]int
+	buildArgs        []string
+	engine           string
+	daemon           string
+	configProxies    map[string]string
+	effectiveProxies map[string]string
 }
 
 func newImageStoreRunner() *imageStoreRunner {
@@ -29,8 +32,14 @@ func (r *imageStoreRunner) Run(_ context.Context, _ string, name string, args ..
 	defer r.mu.Unlock()
 	if name == "docker" && args[0] == "build" {
 		var tag, label, platform string
+		effective := map[string]string{}
 		for i := 1; i < len(args)-1; i++ {
 			switch args[i] {
+			case "--build-arg":
+				pair := strings.SplitN(args[i+1], "=", 2)
+				if len(pair) == 2 {
+					effective[pair[0]] = pair[1]
+				}
 			case "--tag":
 				tag = args[i+1]
 			case "--label":
@@ -39,6 +48,12 @@ func (r *imageStoreRunner) Run(_ context.Context, _ string, name string, args ..
 				platform = args[i+1]
 			}
 		}
+		for key, value := range r.configProxies {
+			if _, explicit := effective[key]; !explicit {
+				effective[key] = value
+			}
+		}
+		r.effectiveProxies = effective
 		r.builds[tag]++
 		r.buildArgs = append([]string(nil), args...)
 		parts := strings.Split(platform, "/")
@@ -71,6 +86,12 @@ func (r *imageStoreRunner) Run(_ context.Context, _ string, name string, args ..
 func (r *imageStoreRunner) Output(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if name == "docker" && args[0] == "info" {
+		if r.daemon != "" {
+			return []byte(r.daemon), nil
+		}
+		return []byte("fixture-daemon"), nil
+	}
 	if name == "docker" && args[0] == "context" {
 		return []byte("fixture-context"), nil
 	}
@@ -119,6 +140,10 @@ func criImage(ref, platform string) []byte {
 	raw, _ := json.Marshal(map[string]any{"status": map[string]any{"repoDigests": []string{ref}}, "info": map[string]any{"imageSpec": map[string]string{"os": parts[0], "architecture": parts[1], "variant": variant}}})
 	return raw
 }
+func imageWorkflow(t *testing.T, r Runner) Workflow {
+	t.Helper()
+	return Workflow{Runner: r, BuildReceiptDir: filepath.Join(t.TempDir(), "receipts")}
+}
 func reusableSpec(t *testing.T) Spec {
 	t.Setenv("DOCKER_HOST", "")
 	t.Setenv("DOCKER_BUILDKIT", "1")
@@ -135,7 +160,7 @@ func TestBuildReusesOnlyMatchingInputs(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			s := reusableSpec(t)
 			r := newImageStoreRunner()
-			w := Workflow{Runner: r}
+			w := imageWorkflow(t, r)
 			ctx := context.Background()
 			image := s.ImageRepository + ":" + s.ImageTag
 			if err := w.buildImage(ctx, s, image); err != nil {
@@ -204,7 +229,7 @@ func TestBuildReusesOnlyMatchingInputs(t *testing.T) {
 func TestConcurrentBuildRequestsReuseOneBuild(t *testing.T) {
 	s := reusableSpec(t)
 	r := newImageStoreRunner()
-	w := Workflow{Runner: r}
+	w := imageWorkflow(t, r)
 	image := s.ImageRepository + ":" + s.ImageTag
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -226,7 +251,7 @@ func TestKindReuseRequiresDigestPlatformAndCompleteStoreOnEveryNode(t *testing.T
 		t.Run(change, func(t *testing.T) {
 			s := reusableSpec(t)
 			r := newImageStoreRunner()
-			w := Workflow{Runner: r}
+			w := imageWorkflow(t, r)
 			ref := s.ImageRepository + ":" + s.ImageTag + "@sha256:" + strings.Repeat("a", 64)
 			for _, node := range []string{"node-a", "node-b"} {
 				r.cri[node+"/"+ref] = criImage(ref, s.Platform)
@@ -269,7 +294,7 @@ func TestKindReuseRequiresDigestPlatformAndCompleteStoreOnEveryNode(t *testing.T
 func TestConcurrentKindRequestsReuseEachNodeOnce(t *testing.T) {
 	s := reusableSpec(t)
 	r := newImageStoreRunner()
-	w := Workflow{Runner: r}
+	w := imageWorkflow(t, r)
 	ref := s.ImageRepository + ":git-123456789abc@sha256:" + strings.Repeat("a", 64)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -365,7 +390,7 @@ func TestReuseBuildNeverOverwritesKnownImmutableTag(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			s := reusableSpec(t)
 			r := newImageStoreRunner()
-			w := Workflow{Runner: r}
+			w := imageWorkflow(t, r)
 			image := s.ImageRepository + ":" + s.ImageTag
 			if err := w.buildImage(context.Background(), s, image); err != nil {
 				t.Fatal(err)
@@ -411,7 +436,7 @@ func TestReuseBuildRequiresVerifiedBaseConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := newImageStoreRunner()
-			w := Workflow{Runner: r}
+			w := imageWorkflow(t, r)
 			if kind != "missing" {
 				arch := "arm64"
 				onbuild := []string{}
@@ -463,7 +488,7 @@ func TestImageLookupFailureCannotProveAbsence(t *testing.T) {
 	for _, r := range []uncertainImageRunner{{inventory: []byte("sha256:present")}, {inventoryErr: errors.New("daemon unavailable")}, {malformed: true}} {
 		r.imageStoreRunner = newImageStoreRunner()
 		s := fixture(t)
-		w := Workflow{Runner: r}
+		w := imageWorkflow(t, r)
 		if err := w.buildImage(context.Background(), s, s.ImageRepository+":"+s.ImageTag); err == nil {
 			t.Fatal("accepted unknown image absence")
 		}
@@ -475,7 +500,7 @@ func TestImageLookupFailureCannotProveAbsence(t *testing.T) {
 func TestDefaultFreshBuildStopsAtExistingImmutableTag(t *testing.T) {
 	s := reusableSpec(t)
 	r := newImageStoreRunner()
-	w := Workflow{Runner: r}
+	w := imageWorkflow(t, r)
 	image := s.ImageRepository + ":" + s.ImageTag
 	if err := w.buildImage(context.Background(), s, image); err != nil {
 		t.Fatal(err)
@@ -496,12 +521,12 @@ func TestBuildCommandRetainsExplicitInputsAndBypass(t *testing.T) {
 			s.Rebuild = bypass == "rebuild"
 			s.RefreshImages = bypass == "refresh"
 			r := newImageStoreRunner()
-			w := Workflow{Runner: r}
+			w := imageWorkflow(t, r)
 			if err := w.buildImage(context.Background(), s, s.ImageRepository+":"+s.ImageTag); err != nil {
 				t.Fatal(err)
 			}
 			args := strings.Join(r.buildArgs, " ")
-			for _, part := range []string{"--pull", "--builder fixture-context", "--network none", "--platform linux/arm64", "--build-arg FEATURE=yes --build-arg VERSION=1", "--label " + buildFingerprintLabel + "="} {
+			for _, part := range []string{"--pull", "--builder fixture-context", "--network none", "--platform linux/arm64", "--build-arg FEATURE=yes", "--build-arg VERSION=1", "--label " + buildFingerprintLabel + "="} {
 				if !strings.Contains(args, part) {
 					t.Fatalf("lost %s in %s", part, args)
 				}
@@ -532,7 +557,7 @@ func TestKindReuseAcceptsCanonicalDigestOnlyWithExactPlatform(t *testing.T) {
 	s := reusableSpec(t)
 	s.ReuseBuild = false
 	r := newImageStoreRunner()
-	w := Workflow{Runner: r}
+	w := imageWorkflow(t, r)
 	digest := "sha256:" + strings.Repeat("a", 64)
 	ref := s.ImageRepository + ":" + s.ImageTag + "@" + digest
 	canonical := s.ImageRepository + "@" + digest
@@ -544,5 +569,367 @@ func TestKindReuseAcceptsCanonicalDigestOnlyWithExactPlatform(t *testing.T) {
 	r.cri["node-a/"+ref] = criImage(canonical, "linux/arm64/v8")
 	if w.kindImagePresent(context.Background(), s, "node-a", ref) {
 		t.Fatal("variant mismatch reused")
+	}
+}
+
+func TestReuseRejectsReplacementIDWithPreservedFingerprint(t *testing.T) {
+	s := reusableSpec(t)
+	r := newImageStoreRunner()
+	w := imageWorkflow(t, r)
+	image := s.ImageRepository + ":" + s.ImageTag
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	r.docker[image] = []byte(strings.ReplaceAll(string(r.docker[image]), "sha256:"+strings.Repeat("c", 64), "sha256:"+strings.Repeat("e", 64)))
+	if err := w.buildImage(context.Background(), s, image); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("replacement was reused: %v", err)
+	}
+	if r.builds[image] != 1 {
+		t.Fatal("replacement was overwritten")
+	}
+}
+func TestFrontendSelectorsDisableReuse(t *testing.T) {
+	for _, directive := range []string{"# syntax = docker/dockerfile:1", "# SYNTAX\t=\tdocker/dockerfile:1", "#syntax=example.test/frontend:latest", "# escape = `", "# EsCaPe\t=\\"} {
+		t.Run(directive, func(t *testing.T) {
+			s := reusableSpec(t)
+			if err := os.WriteFile(s.Dockerfile, []byte(directive+"\nFROM scratch\nCOPY . /src\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			fingerprint, reason, err := buildFingerprint(s)
+			if err != nil || fingerprint != "" || reason == "" {
+				t.Fatalf("frontend accepted: fingerprint=%s reason=%s err=%v", fingerprint, reason, err)
+			}
+		})
+	}
+	for _, value := range []string{"docker/dockerfile:1", "", "example.test/frontend@sha256:" + strings.Repeat("d", 64)} {
+		t.Run("buildarg-"+value, func(t *testing.T) {
+			s := reusableSpec(t)
+			s.BuildArgs = map[string]string{"BUILDKIT_SYNTAX": value}
+			fingerprint, reason, err := buildFingerprint(s)
+			if err != nil || fingerprint != "" || reason == "" {
+				t.Fatalf("custom frontend argument accepted: %s %s %v", fingerprint, reason, err)
+			}
+		})
+	}
+}
+func TestOfflineBuildOverridesImplicitProxyConfig(t *testing.T) {
+	s := reusableSpec(t)
+	r := newImageStoreRunner()
+	w := imageWorkflow(t, r)
+	image := s.ImageRepository + ":" + s.ImageTag
+	proxies := []string{"HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "ftp_proxy", "no_proxy", "all_proxy"}
+	r.configProxies = map[string]string{}
+	for _, key := range proxies {
+		r.configProxies[key] = "implicit-one"
+	}
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range proxies {
+		if value, explicit := r.effectiveProxies[key]; !explicit || value != "" {
+			t.Fatalf("proxy %s not explicitly cleared: %q", key, value)
+		}
+	}
+	for _, key := range proxies {
+		r.configProxies[key] = "implicit-two"
+	}
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	if r.builds[image] != 1 {
+		t.Fatal("irrelevant implicit config prevented reuse")
+	}
+}
+func TestExplicitProxyInputChangesFingerprintAndBuild(t *testing.T) {
+	s := reusableSpec(t)
+	s.BuildArgs = map[string]string{"HTTP_PROXY": "http://explicit-one", "no_proxy": "localhost"}
+	r := newImageStoreRunner()
+	w := imageWorkflow(t, r)
+	image := s.ImageRepository + ":" + s.ImageTag
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	if r.effectiveProxies["HTTP_PROXY"] != "http://explicit-one" || r.effectiveProxies["no_proxy"] != "localhost" {
+		t.Fatal("explicit proxies lost")
+	}
+	first, _, err := buildFingerprint(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.BuildArgs["HTTP_PROXY"] = "http://explicit-two"
+	second, _, err := buildFingerprint(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("proxy input omitted")
+	}
+	if err := w.buildImage(context.Background(), s, image); err == nil {
+		t.Fatal("proxy change reused existing immutable tag")
+	}
+	image = s.ImageRepository + ":git-223456789abc"
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	if r.effectiveProxies["HTTP_PROXY"] != "http://explicit-two" {
+		t.Fatal("new explicit proxy not applied")
+	}
+}
+
+func TestReuseRequiresPrivateValidReceipt(t *testing.T) {
+	for _, change := range []string{"missing", "corrupt", "unknown-field", "trailing-json", "oversized", "missing-image-id", "wrong-id", "wrong-store", "wrong-image", "wrong-platform", "wrong-fingerprint", "world-readable", "world-readable-directory", "symlink"} {
+		t.Run(change, func(t *testing.T) {
+			s := reusableSpec(t)
+			r := newImageStoreRunner()
+			w := imageWorkflow(t, r)
+			image := s.ImageRepository + ":" + s.ImageTag
+			if err := w.buildImage(context.Background(), s, image); err != nil {
+				t.Fatal(err)
+			}
+			files, err := os.ReadDir(w.BuildReceiptDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != 1 {
+				t.Fatalf("verified build should record one receipt, found %d", len(files))
+			}
+			path := filepath.Join(w.BuildReceiptDir, files[0].Name())
+			switch change {
+			case "missing":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			case "corrupt":
+				if err := os.WriteFile(path, []byte("not-json"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "unknown-field":
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var receipt map[string]any
+				if err := json.Unmarshal(data, &receipt); err != nil {
+					t.Fatal(err)
+				}
+				receipt["unknown"] = "unsupported"
+				data, err = json.Marshal(receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "missing-image-id":
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var receipt map[string]any
+				if err := json.Unmarshal(data, &receipt); err != nil {
+					t.Fatal(err)
+				}
+				delete(receipt, "imageId")
+				data, err = json.Marshal(receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "trailing-json":
+				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, writeErr := file.WriteString("{}")
+				closeErr := file.Close()
+				if writeErr != nil || closeErr != nil {
+					t.Fatal("failed to append test JSON")
+				}
+			case "oversized":
+				if err := os.WriteFile(path, []byte(strings.Repeat(" ", 5000)), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "world-readable-directory":
+				if err := os.Chmod(w.BuildReceiptDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "world-readable":
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				other := filepath.Join(t.TempDir(), "receipt")
+				if err := os.WriteFile(other, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(other, path); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var receipt map[string]any
+				if err := json.Unmarshal(data, &receipt); err != nil {
+					t.Fatal(err)
+				}
+				field := map[string]string{"wrong-id": "imageId", "wrong-store": "store", "wrong-image": "image", "wrong-platform": "platform", "wrong-fingerprint": "fingerprint"}[change]
+				receipt[field] = "different"
+				data, err = json.Marshal(receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.buildImage(context.Background(), s, image); err == nil || !strings.Contains(err.Error(), "immutable") {
+				t.Fatalf("accepted %s receipt: %v", change, err)
+			}
+			if r.builds[image] != 1 {
+				t.Fatal("overwrote image after lost provenance")
+			}
+		})
+	}
+}
+func TestReceiptPersistsAcrossWorkflowInstances(t *testing.T) {
+	s := reusableSpec(t)
+	r := newImageStoreRunner()
+	w := imageWorkflow(t, r)
+	image := s.ImageRepository + ":" + s.ImageTag
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	fresh := Workflow{Runner: r, BuildReceiptDir: w.BuildReceiptDir}
+	if err := fresh.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	if r.builds[image] != 1 {
+		t.Fatal("persistent receipt did not permit reuse")
+	}
+}
+
+func TestBuildReceiptIsBoundToActualDaemon(t *testing.T) {
+	s := reusableSpec(t)
+	r := newImageStoreRunner()
+	w := imageWorkflow(t, r)
+	image := s.ImageRepository + ":" + s.ImageTag
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	r.daemon = "another-daemon"
+	if err := w.buildImage(context.Background(), s, image); err == nil {
+		t.Fatal("receipt reused in another Docker store")
+	}
+	if r.builds[image] != 1 {
+		t.Fatal("tag overwritten in another store")
+	}
+}
+func TestDefaultBuildRetainsClientProxyBehavior(t *testing.T) {
+	s := reusableSpec(t)
+	s.ReuseBuild = false
+	r := newImageStoreRunner()
+	r.configProxies = map[string]string{"HTTP_PROXY": "implicit-client-value"}
+	w := imageWorkflow(t, r)
+	if err := w.buildImage(context.Background(), s, s.ImageRepository+":"+s.ImageTag); err != nil {
+		t.Fatal(err)
+	}
+	if r.effectiveProxies["HTTP_PROXY"] != "implicit-client-value" {
+		t.Fatal("default build lost client proxy behavior")
+	}
+	if _, err := os.Stat(w.BuildReceiptDir); !os.IsNotExist(err) {
+		t.Fatalf("default build wrote receipt metadata: %v", err)
+	}
+}
+func TestReceiptPublicationUsesPrivateFilesAndAtomicReplacement(t *testing.T) {
+	s := reusableSpec(t)
+	r := newImageStoreRunner()
+	w := imageWorkflow(t, r)
+	image := s.ImageRepository + ":" + s.ImageTag
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	files, err := os.ReadDir(w.BuildReceiptDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("unexpected leftover receipt temporaries: %d", len(files))
+	}
+	info, err := os.Stat(filepath.Join(w.BuildReceiptDir, files[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("receipt mode=%o", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(w.BuildReceiptDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0700 {
+		t.Fatalf("receipt dir mode=%o", dirInfo.Mode().Perm())
+	}
+	// A confirmed absent target can be built again; the same receipt key is
+	// replaced atomically, without accumulating another provenance record.
+	delete(r.docker, image)
+	s.Rebuild = true
+	if err := w.buildImage(context.Background(), s, image); err != nil {
+		t.Fatal(err)
+	}
+	files, err = os.ReadDir(w.BuildReceiptDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("leftover records after replacement: %d", len(files))
+	}
+}
+
+type invalidBuiltImageRunner struct {
+	*imageStoreRunner
+	failure string
+}
+
+func (r invalidBuiltImageRunner) Run(ctx context.Context, dir, name string, args ...string) error {
+	if err := r.imageStoreRunner.Run(ctx, dir, name, args...); err != nil {
+		return err
+	}
+	if name == "docker" && args[0] == "build" {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for image, raw := range r.docker {
+			switch r.failure {
+			case "id":
+				raw = []byte(strings.ReplaceAll(string(raw), "sha256:"+strings.Repeat("c", 64), "invalid"))
+			case "platform":
+				raw = []byte(strings.ReplaceAll(string(raw), "arm64", "amd64"))
+			case "label":
+				raw = []byte(strings.ReplaceAll(string(raw), buildFingerprintLabel, "wrong-label"))
+			}
+			r.docker[image] = raw
+		}
+	}
+	return nil
+}
+func TestUnverifiedBuildCannotCreateReceipt(t *testing.T) {
+	for _, failure := range []string{"id", "platform", "label"} {
+		t.Run(failure, func(t *testing.T) {
+			s := reusableSpec(t)
+			r := invalidBuiltImageRunner{imageStoreRunner: newImageStoreRunner(), failure: failure}
+			w := imageWorkflow(t, r)
+			if err := w.buildImage(context.Background(), s, s.ImageRepository+":"+s.ImageTag); err == nil || !strings.Contains(err.Error(), "verification") {
+				t.Fatalf("unverified build accepted: %v", err)
+			}
+			if _, err := os.Stat(w.BuildReceiptDir); !os.IsNotExist(err) {
+				t.Fatalf("unverified build recorded provenance: %v", err)
+			}
+		})
 	}
 }

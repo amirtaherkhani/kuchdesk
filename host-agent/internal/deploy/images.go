@@ -66,10 +66,10 @@ func (w Workflow) buildImage(ctx context.Context, s Spec, image string) error {
 	if err != nil {
 		return err
 	}
-	builder := ""
+	builder, store := "", ""
 	if fingerprint != "" {
-		evidence, selectedBuilder, evidenceReason := w.buildDependencyEvidence(ctx, s)
-		builder = selectedBuilder
+		evidence, selectedBuilder, selectedStore, evidenceReason := w.buildDependencyEvidence(ctx, s)
+		builder, store = selectedBuilder, selectedStore
 		if evidenceReason != "" {
 			fingerprint = ""
 			reason = evidenceReason
@@ -78,7 +78,7 @@ func (w Workflow) buildImage(ctx context.Context, s Spec, image string) error {
 			fingerprint = hex.EncodeToString(sum[:])
 		}
 	}
-	matches, exists, err := w.localBuildMatches(ctx, s, image, fingerprint)
+	matches, exists, err := w.localBuildMatches(ctx, s, image, fingerprint, store)
 	if err != nil {
 		return err
 	}
@@ -102,10 +102,24 @@ func (w Workflow) buildImage(ctx context.Context, s Spec, image string) error {
 	if fingerprint != "" {
 		args = append(args, "--builder", builder, "--network", "none", "--label", buildFingerprintLabel+"="+fingerprint)
 	}
-	for _, key := range sortedBuildArgs(s.BuildArgs) {
-		args = append(args, "--build-arg", key+"="+s.BuildArgs[key])
+	buildArgs := s.BuildArgs
+	if fingerprint != "" {
+		buildArgs = offlineBuildArgs(s.BuildArgs)
 	}
-	return w.run(ctx, s.SourceDir, "docker build", "docker", append(args, s.SourceDir)...)
+	for _, key := range sortedBuildArgs(buildArgs) {
+		args = append(args, "--build-arg", key+"="+buildArgs[key])
+	}
+	if err := w.run(ctx, s.SourceDir, "docker build", "docker", append(args, s.SourceDir)...); err != nil {
+		return err
+	}
+	if fingerprint == "" {
+		return nil
+	}
+	local, exists, err := w.inspectLocalBuild(ctx, s, image)
+	if err != nil || !exists || !local.matches(s.Platform, fingerprint) {
+		return fmt.Errorf("built image identity verification failed for %s", image)
+	}
+	return w.writeBuildReceipt(buildReceipt{Version: 1, Store: store, Image: image, Platform: s.Platform, Fingerprint: fingerprint, ImageID: local.ID})
 }
 
 func sortedBuildArgs(args map[string]string) []string {
@@ -127,6 +141,9 @@ func buildFingerprint(s Spec) (string, string, error) {
 	if s.Platform == "" {
 		return "", "explicit platform required", nil
 	}
+	if _, custom := s.BuildArgs["BUILDKIT_SYNTAX"]; custom {
+		return "", "explicit custom frontend argument", nil
+	}
 	if os.Getenv("DOCKER_HOST") != "" {
 		return "", "implicit Docker endpoint is not eligible for reuse", nil
 	}
@@ -145,7 +162,7 @@ func buildFingerprint(s Spec) (string, string, error) {
 		Version, Dockerfile, Platform, Network string
 		Args                                   map[string]string
 		BuildEnvironment                       []string
-	}{"v1", s.Dockerfile, s.Platform, "none", s.BuildArgs, buildEnvironment()})
+	}{"v2", s.Dockerfile, s.Platform, "none", offlineBuildArgs(s.BuildArgs), buildEnvironment()})
 	hash.Write(metadata)
 	unsupported := false
 	err = filepath.WalkDir(s.SourceDir, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -198,11 +215,10 @@ func offlineDockerfile(data string) bool {
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
-			directive := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "#")))
-			if strings.HasPrefix(directive, "syntax=") {
-				return false
-			}
-			if strings.HasPrefix(directive, "escape=") {
+			directive := strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			key, _, hasEquals := strings.Cut(directive, "=")
+			key = strings.ToLower(strings.TrimSpace(key))
+			if hasEquals && (key == "syntax" || key == "escape") {
 				return false
 			}
 			continue
@@ -255,48 +271,66 @@ func pinnedReference(ref string) bool {
 
 // An inspection failure is not absence. Only a successful exact-tag inventory
 // showing no image allows a build; uncertain or malformed evidence stops it.
-func (w Workflow) localBuildMatches(ctx context.Context, s Spec, image, fingerprint string) (bool, bool, error) {
+type localBuildImage struct {
+	ID           string `json:"Id"`
+	OS           string `json:"Os"`
+	Architecture string
+	Variant      string
+	Config       struct{ Labels map[string]string }
+}
+
+func (local localBuildImage) matches(platform, fingerprint string) bool {
+	return fingerprint != "" && digestPattern.MatchString(local.ID) && platformName(local.OS, local.Architecture, local.Variant) == platform && local.Config.Labels[buildFingerprintLabel] == fingerprint
+}
+func (w Workflow) localBuildMatches(ctx context.Context, s Spec, image, fingerprint, store string) (bool, bool, error) {
+	local, exists, err := w.inspectLocalBuild(ctx, s, image)
+	if err != nil || !exists {
+		return false, exists, err
+	}
+	return local.matches(s.Platform, fingerprint) && w.buildReceiptMatches(buildReceipt{Version: 1, Store: store, Image: image, Platform: s.Platform, Fingerprint: fingerprint, ImageID: local.ID}), true, nil
+}
+func (w Workflow) inspectLocalBuild(ctx context.Context, s Spec, image string) (localBuildImage, bool, error) {
 	raw, err := w.Runner.Output(ctx, s.SourceDir, "docker", "image", "inspect", image)
 	if err != nil {
 		listed, listErr := w.Runner.Output(ctx, s.SourceDir, "docker", "image", "ls", "--no-trunc", "--quiet", "--filter", "reference="+image)
 		if listErr != nil || strings.TrimSpace(string(listed)) != "" {
-			return false, false, fmt.Errorf("immutable image tag lookup uncertain for %s", image)
+			return localBuildImage{}, false, fmt.Errorf("immutable image tag lookup uncertain for %s", image)
 		}
-		return false, false, nil
+		return localBuildImage{}, false, nil
 	}
-	var images []struct {
-		ID           string `json:"Id"`
-		OS           string `json:"Os"`
-		Architecture string
-		Variant      string
-		Config       struct{ Labels map[string]string }
-	}
+	var images []localBuildImage
 	if json.Unmarshal(raw, &images) != nil || len(images) != 1 {
-		return false, true, fmt.Errorf("immutable image inspection invalid for %s", image)
+		return localBuildImage{}, true, fmt.Errorf("immutable image inspection invalid for %s", image)
 	}
-	local := images[0]
-	return fingerprint != "" && digestPattern.MatchString(local.ID) && platformName(local.OS, local.Architecture, local.Variant) == s.Platform && local.Config.Labels[buildFingerprintLabel] == fingerprint, true, nil
+	return images[0], true, nil
 }
 
 // Pinned base descriptors still need local config evidence: inherited ONBUILD
 // instructions can introduce remote inputs. Unknown bases disable reuse. The
 // daemon version is part of build configuration, including its default frontend.
-func (w Workflow) buildDependencyEvidence(ctx context.Context, s Spec) (string, string, string) {
+func (w Workflow) buildDependencyEvidence(ctx context.Context, s Spec) (string, string, string, string) {
 	selected, err := w.Runner.Output(ctx, s.SourceDir, "docker", "context", "show")
 	builder := strings.TrimSpace(string(selected))
 	if err != nil || !contextPattern.MatchString(builder) {
-		return "", "", "Docker context unavailable"
+		return "", "", "", "Docker context unavailable"
 	}
+	identity, err := w.Runner.Output(ctx, s.SourceDir, "docker", "info", "--format", "{{.ID}}")
+	daemon := strings.TrimSpace(string(identity))
+	if err != nil || !contextPattern.MatchString(daemon) {
+		return "", "", "", "Docker store identity unavailable"
+	}
+	store := builder + "\x00" + daemon
+
 	version, err := w.Runner.Output(ctx, s.SourceDir, "docker", "version", "--format", "{{json .Server}}")
 	var server map[string]any
 	if err != nil || json.Unmarshal(version, &server) != nil || len(server) == 0 {
-		return "", "", "builder configuration unavailable"
+		return "", "", "", "builder configuration unavailable"
 	}
 	data, err := os.ReadFile(s.Dockerfile)
 	if err != nil {
-		return "", "", "Dockerfile unavailable"
+		return "", "", "", "Dockerfile unavailable"
 	}
-	evidence := builder + "\x00" + string(version)
+	evidence := store + "\x00" + string(version)
 	stages := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
@@ -314,7 +348,7 @@ func (w Workflow) buildDependencyEvidence(ctx context.Context, s Spec) (string, 
 				Config       struct{ OnBuild []string }
 			}
 			if err != nil || json.Unmarshal(raw, &bases) != nil || len(bases) != 1 {
-				return "", "", "base config unavailable"
+				return "", "", "", "base config unavailable"
 			}
 			base := bases[0]
 			matched := false
@@ -324,7 +358,7 @@ func (w Workflow) buildDependencyEvidence(ctx context.Context, s Spec) (string, 
 				}
 			}
 			if !matched || len(base.Config.OnBuild) != 0 || platformName(base.OS, base.Architecture, base.Variant) != s.Platform {
-				return "", "", "base digest/platform or inherited inputs unverified"
+				return "", "", "", "base digest/platform or inherited inputs unverified"
 			}
 			evidence += "\x00" + string(raw)
 		}
@@ -332,7 +366,7 @@ func (w Workflow) buildDependencyEvidence(ctx context.Context, s Spec) (string, 
 			stages[fields[3]] = true
 		}
 	}
-	return evidence, builder, ""
+	return evidence, builder, store, ""
 }
 func platformName(os, arch, variant string) string {
 	result := os + "/" + arch
@@ -430,4 +464,19 @@ func buildEnvironment() []string {
 	}
 	sort.Strings(settings)
 	return settings
+}
+
+// Docker otherwise auto-fills these arguments from credential-bearing client
+// config. Explicit empty defaults keep offline inputs known without reading it.
+func offlineBuildArgs(explicit map[string]string) map[string]string {
+	effective := make(map[string]string, len(explicit)+10)
+	for key, value := range explicit {
+		effective[key] = value
+	}
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "ftp_proxy", "no_proxy", "all_proxy"} {
+		if _, ok := effective[key]; !ok {
+			effective[key] = ""
+		}
+	}
+	return effective
 }

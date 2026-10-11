@@ -96,9 +96,10 @@ func filteredEnvironment() []string {
 }
 
 type Workflow struct {
-	Runner    Runner
-	OnStep    func(string)
-	Preflight Preflight
+	Runner          Runner
+	OnStep          func(string)
+	Preflight       Preflight
+	BuildReceiptDir string // Empty uses the current user's cache directory.
 }
 
 func (s Spec) Validate() error {

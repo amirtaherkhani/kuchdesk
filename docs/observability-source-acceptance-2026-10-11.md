@@ -121,6 +121,16 @@ At 15:06:42 UTC, public registry reads SHA-256 verified the exact root index, se
 
 Evidence: private `alloy-image-checkpoint.json` and `alloy-host-image-tree.txt` beside the live acceptance records. Removed IDs/tags: none; logical removed bytes 0; actual disk savings unmeasured.
 
+### Subsequent approved reset and Alloy row cleanup
+
+The later action-time authorization reset only Loki, Tempo, Prometheus and Alertmanager. Loki/Tempo now have fresh bound 10Gi standard claims; both old PVs and exact data directories are absent. Prometheus/Alertmanager have replacement Pod UIDs and their old emptyDir paths are absent. All four StatefulSets are ready 1/1 and their readiness endpoints pass; Doctor passes 7/7. No backup was created. The six protected claims and Grafana/Infisical Pod identities and images are unchanged.
+
+Grafana reset was conditional on complete restoration evidence. All 29 dashboard UIDs match labeled ConfigMap JSON sources and report provisioned; all three data sources are read-only provisioned. Its PVC plugin directory is empty. Grafana was preserved because existing user/organization preferences cannot be verified through the anonymous API (401/403), and `grafana-admin` InfisicalSecret has `ReadyToSyncSecrets=False` since 12:06:55 UTC, before these resets. No credentials were retrieved and no identity/access changes were attempted.
+
+The fresh Alloy check used Docker `desktop-linux` and `default`, which identify the same engine. Two displayed host rows share one root ID; the node has one required arm64 image. The tree contains one materialized arm64 child plus three zero-byte platform descriptors. The reported 15–20 UI rows are not reproduced by these supported inventories; the exact UI/store mismatch remains unverified.
+
+Removing the unused digest-suffixed Alloy name unexpectedly caused Docker to remove both host names and the root object. The running/exited node copy was untouched. The required host image was restored by its same pinned public digest and platform, with only the active plain version tag. The recovery script now supports `--alloy-only` and the existing explicit `--node` option, without downloading the three retired images in that mode; it refuses to overwrite an existing different Alloy tag. Its live host/node `--verify-only` check passes. Final restoration evidence is recorded in private `alloy-current-inventory.json`; net physical images removed is zero, with one required image in each store.
+
 Infisical upgrade, its preflight/backup, and SDK upgrade are dismissed from this task. They are not deferred execution items. The old Nova session and task worktree remain preserved, including unrelated untracked acceptance-helper sources and cache files.
 
 ## Duplicate build and pull prevention source acceptance

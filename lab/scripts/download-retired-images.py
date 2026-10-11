@@ -3,6 +3,7 @@
 
 Python 3 and Docker are required. Default: Docker desktop-linux only.
 Add --node desktop-control-plane to restore the selected KIND node store too.
+Use --alloy-only for the retained Alloy version instead of the three retired images.
 Registry availability is checked by the actual pinned pull when needed, not assumed.
 """
 
@@ -23,6 +24,11 @@ IMAGES = (
     ("ghcr.io/grafana/k6-operator@sha256:b97b8e32867a553b7f866acd1e0a2ac91af81480c04c12a6ee55df3ae99d2ad6",
      "sha256:67876cb51a8e20d225e20312fa50921954832a2968b4ce8e3a455b22b8dcb8d5"),
 )
+ALLOY = (
+    "docker.io/grafana/alloy@sha256:4f6ddc56ffdcf8a6316748fc5162972e20cb301523cac1bb4a31957df733ae9b",
+    "sha256:24d95a2c6bc32eb224e73cce0ec1465c245c31853e7039046d2af82436760775",
+)
+ALLOY_TAG = "grafana/alloy:v1.17.1"
 # The selected Blackbox config and publisher descriptor explicitly name v8.
 VARIANTS = {IMAGES[0][0]: "v8"}
 
@@ -58,7 +64,7 @@ def canonical(ref):
 
 def host_complete(docker, ref):
     fmt = ('{"digests":{{json .RepoDigests}},"os":{{json .Os}},'
-           '"arch":{{json .Architecture}},"variant":{{json .Variant}}}')
+           '"arch":{{json .Architecture}},"variant":{{json (index . "Variant")}}}')
     result = command(docker + ["image", "inspect", "--format", fmt, ref])
     if result.returncode:
         return False
@@ -66,7 +72,7 @@ def host_complete(docker, ref):
         image = json.loads(result.stdout)
         if image["os"] + "/" + image["arch"] != PLATFORM:
             return False
-        if image.get("variant", "") != VARIANTS.get(ref, ""):
+        if (image.get("variant") or "") != VARIANTS.get(ref, ""):
             return False
         if ref not in {canonical(x) for x in image.get("digests") or []}:
             return False
@@ -104,8 +110,20 @@ def node_complete(docker, node, ref, config_id):
     return node_content_complete(docker, node, ref)
 
 
-def restore(docker, nodes, verify_only):
-    for ref, config_id in IMAGES:
+def ensure_alloy_tag(docker, verify_only):
+    result = command(docker + ["image", "inspect", "--format", "{{json .RepoDigests}}", ALLOY_TAG])
+    if result.returncode == 0:
+        if ALLOY[0] not in {canonical(x) for x in json.loads(result.stdout) or []}:
+            raise RuntimeError("existing Alloy tag has different content; refusing overwrite")
+        return
+    tags = required(docker + ["image", "ls", "--all", "--format", "{{.Repository}}:{{.Tag}}"])
+    if ALLOY_TAG in tags.splitlines() or verify_only:
+        raise RuntimeError("Alloy active tag cannot be verified; refusing overwrite")
+    required(docker + ["image", "tag", ALLOY[0], ALLOY_TAG])
+
+
+def restore(docker, nodes, verify_only, images=None):
+    for ref, config_id in IMAGES if images is None else images:
         if not host_complete(docker, ref):
             if verify_only:
                 raise RuntimeError("Docker digest/platform/content unavailable: " + ref)
@@ -114,6 +132,8 @@ def restore(docker, nodes, verify_only):
             if not host_complete(docker, ref):
                 raise RuntimeError("Docker digest/platform/content verification failed: " + ref)
         print("Docker verified:", ref, flush=True)
+        if ref == ALLOY[0]:
+            ensure_alloy_tag(docker, verify_only)
         for node in nodes:
             if not node_complete(docker, node, ref, config_id):
                 if verify_only:
@@ -134,20 +154,24 @@ def restore(docker, nodes, verify_only):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--docker-context", default="desktop-linux")
+    parser.add_argument("--alloy-only", action="store_true",
+                        help="restore only the exact retained Alloy digest and active tag")
     parser.add_argument("--node", action="append", default=[],
                         help="explicit existing KIND container name; repeat for another node")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--plan", action="store_true", help="print exact scope; no Docker calls")
     modes.add_argument("--verify-only", action="store_true", help="check existing stores; no downloads")
     args = parser.parse_args(argv)
+    images = (ALLOY,) if args.alloy_only else IMAGES
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.docker_context):
         parser.error("invalid explicit Docker context")
     if len(set(args.node)) != len(args.node) or any(not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", x) for x in args.node):
         parser.error("invalid or repeated node name")
     if args.plan:
         print(json.dumps({"platform": PLATFORM, "dockerContext": args.docker_context,
-                          "selectedNodes": args.node, "images": [x[0] for x in IMAGES],
-                          "imagePlatforms": {x[0]: image_platform(x[0]) for x in IMAGES},
+                          "selectedNodes": args.node, "images": [x[0] for x in images],
+                          "imagePlatforms": {x[0]: image_platform(x[0]) for x in images},
+                          "restoredTags": [ALLOY_TAG] if args.alloy_only else [],
                           "removal": False, "deployment": False}, indent=2))
         return 0
     docker = ["docker", "--context", args.docker_context]
@@ -161,7 +185,7 @@ def main(argv=None):
             arch = required(docker + ["exec", node, "uname", "-m"])
             if arch not in ("aarch64", "arm64"):
                 raise RuntimeError("selected node is not linux/arm64: " + node)
-        restore(docker, args.node, args.verify_only)
+        restore(docker, args.node, args.verify_only, images)
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
         print("Recovery stopped: " + str(error) + ". No image/data deletion or deployment was performed.", file=sys.stderr)
         return 1

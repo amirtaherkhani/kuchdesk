@@ -1,4 +1,6 @@
 import importlib.util
+import contextlib
+import io
 import json
 import pathlib
 import subprocess
@@ -12,6 +14,33 @@ spec.loader.exec_module(recovery)
 
 
 class RecoverySafetyTests(unittest.TestCase):
+    def test_alloy_recovery_never_overwrites_a_different_active_tag(self):
+        result = subprocess.CompletedProcess([], 0, json.dumps(["grafana/alloy@sha256:" + "0" * 64]).encode())
+        with mock.patch.object(recovery, "command", return_value=result), mock.patch.object(recovery, "required") as operation:
+            with self.assertRaisesRegex(RuntimeError, "refusing overwrite"):
+                recovery.ensure_alloy_tag(["docker"], False)
+            operation.assert_not_called()
+
+    def test_alloy_only_plan_never_downloads_other_images(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(recovery, "command") as operation:
+            self.assertEqual(recovery.main(["--alloy-only", "--plan", "--node", "desktop-control-plane"]), 0)
+        plan = json.loads(out.getvalue())
+        self.assertEqual(plan["images"], [recovery.ALLOY[0]])
+        self.assertEqual(plan["imagePlatforms"][recovery.ALLOY[0]], "linux/arm64")
+        operation.assert_not_called()
+
+    def test_absent_host_variant_requires_digest_platform_and_complete_content(self):
+        ref = "docker.io/grafana/alloy@sha256:" + "4" * 64
+        data = {"digests": [ref], "os": "linux", "arch": "arm64", "variant": None}
+        def output(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, json.dumps(data).encode() if "inspect" in args else b"")
+        with mock.patch.object(recovery, "command", side_effect=output):
+            self.assertTrue(recovery.host_complete(["docker"], ref))
+        data["arch"] = "amd64"
+        with mock.patch.object(recovery, "command", side_effect=output):
+            self.assertFalse(recovery.host_complete(["docker"], ref))
+
     def test_observed_blackbox_v8_is_accepted_only_when_content_is_complete(self):
         ref, config = recovery.IMAGES[0]
         data = {"info": {"imageSpec": {"os": "linux", "architecture": "arm64", "variant": "v8"}}, "status": {"id": config, "repoDigests": [ref]}}

@@ -1,0 +1,3 @@
+# DOCUMENTARY NO-OP: live Tempo already uses 72h. Do not roll it.
+tempo:
+  retention: 72h

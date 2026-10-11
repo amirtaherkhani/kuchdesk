@@ -1,0 +1,9 @@
+# OPTIONAL, SEPARATE APPROVAL: permanent deletion of older annotations.
+# Confirm active backend and alert lookbacks before any apply.
+grafana.ini:
+  unified_alerting.state_history.annotations:
+    max_age: 72h
+  annotations.dashboard:
+    max_age: 72h
+  annotations.api:
+    max_age: 72h

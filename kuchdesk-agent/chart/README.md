@@ -2,6 +2,8 @@
 
 This standalone chart deploys the Kubernetes agent as one internal cluster service. Discovery is read-only by default. It does not install an image registry, secret manager, DNS server, dashboard, or other shared services.
 
+For the migrated home-lab release, follow the [agent namespace workflow](../../lab/migrations/agent-platform-tools/README.md): workload namespace `platform-tools`, Helm metadata `development-tools`. Ordinary unrendered upgrades would revert the move. The examples below describe a fresh installation.
+
 Supply an image already available to the Kubernetes runtime and use an immutable tag. Set a unique cluster ID and display name for each cluster; the chart has no home-lab identity baked in. Create the bearer token Secret in the target namespace before installation; the chart reads it but does not manage its lifecycle. For example, with a token obtained through your normal secret workflow:
 
 ```bash

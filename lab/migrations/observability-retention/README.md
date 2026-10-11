@@ -55,6 +55,35 @@ Compare with no-overlay baseline renders by object identity and parsed contents.
 
 The [contract checks](test_renderer.py) verify unchanged objects and alert definitions, the limited recording/dashboard fields, and rejection of missing, duplicated, drifted or already-transformed inputs. Use `yq` to parse YAML for semantic comparison: Ruby-generated JSON can normalize a leading colon in unrelated metric names and is not the comparison baseline.
 
-These are render commands only. Installed Helm 4 rejects executable `--post-renderer` paths (expects a plugin); do not copy a Helm 3 rollout command. Review compatible deployment integration before applying. Do not apply the entire rendered monitoring stack with a generic command to bypass this limitation.
+## Helm 4 process-scoped renderer
 
-Remaining gates: fresh runtime overrides and Grafana-managed rule/backend inventory; exact irreversible-history approval; refresh active silence counts; supported deployment integration. The optional Grafana overlay additionally needs explicit category approval and verification that the live rollout preserves the existing renderer token. Preserve current versions, ingress/auth, namespaces, PVCs, ingestion and deletion grace. No new backups or raw purges are included.
+Helm 4 expects a postrenderer plugin name. Its subprocess plugin integration was verified offline against the same pinned chart, private live values and overlay: all 95 objects equal the reviewed candidate after normalizing only empty/null `metadata.annotations` maps omitted by serialization. No global plugin installation or live Helm operation occurred.
+
+Create `<private-plugin-root>/monitoring-retention/plugin.yaml` with this descriptor, setting the command to the maintained checkout:
+
+```yaml
+apiVersion: v1
+type: postrenderer/v1
+name: monitoring-retention
+version: 0.1.0
+runtime: subprocess
+runtimeConfig:
+  platformCommand:
+    - command: /absolute/repository/lab/migrations/observability-retention/post-renderer.rb
+```
+
+Repeat the actual Helm 4 integration offline:
+
+```sh
+HELM_PLUGINS="$PRIVATE_PLUGIN_ROOT" helm template monitoring \
+  "$ARCHIVES/kube-prometheus-stack-87.15.1.tgz" \
+  -n observability --kube-version 1.36.1 \
+  -f "$MONITORING_LIVE_VALUES" -f monitoring-values.yaml \
+  --post-renderer monitoring-retention > "$PRIVATE/monitoring-helm4-candidate.yaml"
+```
+
+Compare the entire result with the separately reviewed renderer output. The renderer's drift/reuse guards remain mandatory. A live upgrade must use the same process-scoped integration and reviewed inputs after the remaining gates pass; this render check is not a tested rollout. Never apply the whole rendered monitoring stack with a generic command to bypass Helm ownership.
+
+The 08:02 UTC read found 218 healthy Prometheus rules, including 133 alerts, and zero Alertmanager silences. Grafana health returned 200 with database `ok`; its rule API returned 401. Loki readiness returned 200, but config/runtime/rule endpoints returned 500/404/400. The configured `loki-runtime` ConfigMap is empty; an attempted mounted-file read failed because the Loki container has no `cat` executable. This narrows the override inventory but does not prove loaded runtime configuration or absence of Grafana-managed rules.
+
+Remaining gates: fresh effective Loki override/rule verification and authorized Grafana-managed rule/backend inventory; exact irreversible-history approval; refresh active silence counts and complete live-aware Helm preflight. The optional Grafana overlay additionally needs explicit category approval and verification that the live rollout preserves the existing renderer token. Preserve current versions, ingress/auth, namespaces, PVCs, ingestion and deletion grace. No new backups or raw purges are included.

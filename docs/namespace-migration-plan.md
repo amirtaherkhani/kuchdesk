@@ -135,6 +135,20 @@ The k6 and agent stages are complete. Remaining moves need their own resource/ow
 
 Retain source namespaces and old certificate deliveries until their actual consumers are reviewed. Observability and Infisical stay in their existing functional namespaces. Shared databases/brokers remain designs, with no new identity, grant, credential, network, PKI or storage rollout implied. Infisical upgrade and SDK work remain deferred.
 
+### Dependency refresh — 2026-10-11 08:14 UTC
+
+Reference-only reads found these concrete dependencies; no Secret payload or CA key was read and no namespace cutover occurred:
+
+| Component | Current dependencies | Required next preflight |
+|---|---|---|
+| cert-manager `v1.21.0` | Three ServiceAccounts in `platform-system`; ten ClusterRoleBinding subjects there; two leader-election RoleBindings remain in `kube-system`; dynamic-serving RoleBinding remains in `platform-system` | Preserve role rules and ownership; plan new SA subjects, dynamic-serving resources, and both admission-webhook Service references before cutover |
+| cert-manager CA | Controller has `--cluster-resource-namespace=$(POD_NAMESPACE)`; ClusterIssuer `local-dev-ca` names Secret `local-dev-ca`; its Certificate is in `platform-system` | Decide an explicit cluster-resource namespace that preserves the existing CA Secret, or separately approve a secure PKI handover; moving only the Pod would change where ClusterIssuer secrets are resolved |
+| Traefik `v3.6.12` | `traefik-platform-system` ClusterRoleBinding; ClusterIP `traefik` and LoadBalancer `traefik-lan`, ports 80/443; Kubernetes CRD/Ingress providers enabled | Review all routing/TLS consumers, Helm ownership and Host forwarding; preserve current Service traffic until target verification |
+| Technitium `15.5.1` | StatefulSet `technitium/technitium`, claim template `data`, bound `data-technitium-0`; DNS TCP/UDP 53 and admin 5380; separate LAN LoadBalancer | Prepare an approved volume handover, DNS continuity and Host/admin Secret-reference changes; a namespace edit cannot move the bound claim |
+| Registry `2` | Deployment `platform-system/kuchdesk-local-registry` mounts claim `kuchdesk-local-registry`; retained `kubedeck-local-registry` has separate ownership still to resolve | Map both claims and the localhost:5001/node recovery/pull path; prepare data and Host-forwarder handover before target deployment |
+
+Both cert-manager admission configurations point to `platform-system/cert-manager-webhook`, paths `/mutate` and `/validate`, port 443, with CA bundles present. Preserve verification and injection ownership. Six existing namespace-local `local-dev-tls` Certificates were Ready at the preceding inventory; preserve their deliveries. No next live migration is covered by the completed agent/k6 approvals. These findings are a dependency plan, not an approved final manifest or recovery proof.
+
 ## Verification-helper preservation
 
 The active worktree's two untracked activation-helper source files were copied byte-for-byte to a private task archive under the Codex task-artifacts directory. Copies use `.go.txt`, with SHA-256 manifest, directory mode0700 and files0600. Independent source review found no embedded actual credential literal. No environment/session files, credentials, binaries or database data were included.

@@ -4,6 +4,8 @@
 
 Fresh API verification: **2026-10-11 05:51:57 UTC**, context `docker-desktop`, node `desktop-control-plane` (containerd 2.3.1). Earlier API/Docker unavailability is resolved; the evidence below supersedes the blocked snapshot. Recheck identities and consumers immediately before presenting the final destructive confirmation.
 
+The 08:00 UTC refresh confirms all ten exact PVC/PV UIDs below still match, all claims remain Bound with reclaim `Delete`, and 84 built-in workload objects contain no direct claim consumer. The node-exporter root-path overlap remains; VolumeAttachments remain zero. All 18 claims were inventoried, and the other eight stay excluded. Nothing was deleted, backed up, or mounted for this refresh. [Current decision list](pending-execution-decisions-2026-10-11.md).
+
 ## Exact candidate set
 
 Every claim is in **`platform-storage`**. All ten are Bound, storage class `standard`, reclaim policy **`Delete`**, volume mode `Filesystem`, access mode `ReadWriteOnce`, hostPath type `DirectoryOrCreate`, node affinity `kubernetes.io/hostname In [desktop-control-plane]`. Each PV claimRef namespace/name/UID matches its PVC. Claims have no owner references and carry `kubernetes.io/pvc-protection` finalizers.

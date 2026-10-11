@@ -105,3 +105,9 @@ The user subsequently approved one disposable fake-data project and permanent de
 Final post-cleanup Doctor passed **8/8**, with enrollment evidence reporting exactly **2 projects**. A fresh organization inventory confirmed only the original two project IDs.
 
 The live new-project discovery gate is now complete. See [helper inventory](host-helper-inventory.md).
+
+## Reload verification refresh — 2026-10-11
+
+The installed `dev.kuchdesk.host-bridge` binary reports Go build revision `7e05c1ed0ed589d7f9e95d777403cb11d5f89dfe`, unmodified. That revision includes dynamic interval reload commit `eb7df17bcaf0c0d146258b0c488029e1c1ce01c0`; the relevant reload/policy/profile source has no subsequent change at `0edcee42`. The installed Host-agent binary reports the same revision with modified source, so its build metadata alone does not prove exact source equality.
+
+Fresh offline tests passed in enrollment, platform, projectenv and the Infisical MCP command using cached dependencies. Enrollment policy reload and the interval/backoff/Retry-After tests are complete within the implemented scope. File-based base-project metadata refreshes per invocation/request; process environment, identity/organization bindings, Host DNS process settings and Kubernetes Pod environment retain their documented restart or migration gates. No new restart, credential rotation or live policy mutation was performed for this verification. Remove the completed bounded reload verification from the active task list; broader hot reload is a separate proposal.

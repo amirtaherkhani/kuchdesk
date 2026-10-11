@@ -88,6 +88,20 @@ class DashboardRoutingTests(unittest.TestCase):
         self.assertEqual(api.dashboard["spec"]["time"]["from"], "now-6h")
         self.assertEqual(module.apply_dashboard(api, self.payload), "unchanged")
 
+    def test_nested_array_defaults_survive_unrelated_edits_and_empty_array_clears(self):
+        api = GrafanaAPI()
+        self.payload["spec"]["panels"] = [{"id": 1, "title": "Panel"}]
+        module.apply_dashboard(api, self.payload)
+        api.dashboard["spec"]["panels"][0]["description"] = "Saved default"
+        self.assertEqual(module.apply_dashboard(api, self.payload), "unchanged")
+        self.payload["spec"]["title"] = "Dashboard title edit"
+        self.assertEqual(module.apply_dashboard(api, self.payload), "updated")
+        self.assertEqual(api.dashboard["spec"]["panels"][0]["description"], "Saved default")
+        self.assertEqual(module.apply_dashboard(api, self.payload), "unchanged")
+        self.payload["spec"]["panels"] = []
+        self.assertEqual(module.apply_dashboard(api, self.payload), "updated")
+        self.assertEqual(api.dashboard["spec"]["panels"], [])
+
     def test_existing_folder_creation_race_reuses_winner(self):
         api = GrafanaAPI(folder=False, collision=True)
         self.assertEqual(module.apply_dashboard(api, self.payload), "created")

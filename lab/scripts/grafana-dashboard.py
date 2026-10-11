@@ -41,13 +41,17 @@ def requested_content(spec, existing):
 
 
 def overlay_fields(existing, desired):
-    result = copy.deepcopy(existing)
-    for key, value in desired.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = overlay_fields(result[key], value)
-        else:
-            result[key] = copy.deepcopy(value)
-    return result
+    if isinstance(desired, dict) and isinstance(existing, dict):
+        result = copy.deepcopy(existing)
+        for key, value in desired.items():
+            result[key] = overlay_fields(result.get(key), value)
+        return result
+    if isinstance(desired, list) and isinstance(existing, list):
+        # Source controls count/order; omitted fields in object entries are
+        # retained by position, matching requested_fields_match's semantics.
+        return [overlay_fields(existing[index] if index < len(existing) else None, value)
+                for index, value in enumerate(desired)]
+    return copy.deepcopy(desired)
 
 
 def checked(status, accepted):
@@ -122,7 +126,7 @@ def apply_dashboard(request, payload):
     if requested_fields_match(existing["spec"], desired):
         return "unchanged"
     # Preserve fields omitted from the source, including defaults added by
-    # Grafana. Explicit arrays (including []) replace their saved counterparts.
+    # Grafana. Arrays control count/order while retaining omitted object fields.
     payload["spec"] = overlay_fields(dashboard_content(existing["spec"]), desired)
     payload["spec"]["uid"] = uid
     metadata["resourceVersion"] = existing["metadata"]["resourceVersion"]

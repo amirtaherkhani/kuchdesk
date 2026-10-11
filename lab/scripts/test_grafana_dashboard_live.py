@@ -26,6 +26,7 @@ class AnonymousAcceptance(unittest.TestCase):
         path = module.DASHBOARDS + "/" + uid
         self.assertEqual(request("GET", path)[0], 404)
         payload = {"metadata": {"name": uid}, "spec": {"uid": uid, "id": None, "version": 0, "title": "Temporary anonymous acceptance " + uid, "editable": True, "schemaVersion": 41, "panels": [], "tags": [uid]}}
+        payload["spec"]["panels"] = [{"id": 1, "type": "text", "title": "Disposable fixture panel", "options": {"mode": "markdown", "content": "Temporary acceptance fixture"}}]
         created = False
         try:
             self.assertEqual(module.apply_dashboard(request, payload), "created")
@@ -34,12 +35,15 @@ class AnonymousAcceptance(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertTrue(body["metadata"]["annotations"]["grafana.app/folder"])
             self.assertTrue(module.requested_fields_match(body["spec"], module.requested_content(payload["spec"], body["spec"])))
+            saved_panels = body["spec"]["panels"]
             self.assertEqual(module.apply_dashboard(request, payload), "unchanged")
             payload["spec"]["title"] += " edited"
             self.assertEqual(module.apply_dashboard(request, payload), "updated")
             status, body = request("GET", path)
             self.assertEqual(status, 200)
             self.assertEqual(body["spec"]["title"], payload["spec"]["title"])
+            self.assertEqual(body["spec"]["panels"], saved_panels)
+            self.assertEqual(module.apply_dashboard(request, payload), "unchanged")
         finally:
             if created:
                 status, body = request("GET", path)

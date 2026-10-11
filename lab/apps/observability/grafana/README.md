@@ -76,11 +76,10 @@ idempotently if absent using Grafana's ordinary folder defaults, and defaults
 `metadata.annotations["grafana.app/folder"]` to the resolved UID. Reapplying the
 same dashboard skips the write; edits use the current resource version. It
 reconciles fields supplied in the source, preserves omitted/default fields,
-and keeps schema migrations performed by Grafana. Explicit arrays, including
-empty arrays, replace their saved values. Exported storage IDs and revisions
-are ignored.
-It
-refuses to move existing General/other-folder dashboards, override another
+and keeps schema migrations performed by Grafana. Arrays control item count
+and order; omitted fields in their object entries are retained by position.
+An empty array clears the saved array. Exported storage IDs and revisions are
+ignored. It refuses to move existing General/other-folder dashboards, override another
 folder annotation, or update source-provisioned dashboards. Requests are
 anonymous with trusted TLS; there is no admin-credential or ACL fallback. A
 denied request stops and reports failure. Raw third-party API creates without

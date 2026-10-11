@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: traefik-lan
-  namespace: platform-system
+  namespace: platform-networking
   labels:
     app.kubernetes.io/name: traefik-lan
     app.kubernetes.io/part-of: kuchdesk-platform
@@ -13,10 +13,12 @@ spec:
     app.kubernetes.io/name: traefik
   ports:
     - name: web
+      nodePort: 32366
       port: 80
       protocol: TCP
       targetPort: web
     - name: websecure
+      nodePort: 32013
       port: 443
       protocol: TCP
       targetPort: websecure

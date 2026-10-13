@@ -33,6 +33,32 @@ This directory keeps the Grafana observability stack, k6 Operator, and the platf
 
 The runtime on Docker Desktop Kubernetes consists of Grafana and its image renderer, Prometheus Stack, Loki, Tempo, Alloy, and k6 Operator. cert-manager and Traefik provide HTTPS for the selected site domain; Infisical and its operator supply `observability/grafana-admin`. The existing Grafana, Loki, Tempo, and Infisical PVCs are reused. Loki's chart values retain its PVC when the StatefulSet scales down or is removed.
 
+## TLS certificate name and existing installations
+
+The checked-in profile selects `tls.secretName: "kubedesk-local-tls"` for a
+fresh installation. The renderer uses this name for every namespace's leaf
+Certificate and target Secret, Traefik's default TLSStore, both application
+Ingress overlays, and the `secretName` summary field. CA and issuer names are
+configured separately and do not change with this field.
+
+An explicit `tls.secretName` can select an existing or custom certificate name;
+it remains unchanged when `--domain` overrides the domain. Profiles that omit
+the field or leave it empty keep the older domain-derived convention, such as
+`local-dev-tls` for `local.dev`.
+
+For an existing installation, retain its current name in the deployment profile
+before rendering from an updated checkout. For example, set
+`tls.secretName: "local-dev-tls"` to keep that installation's current references.
+Review the generated diff before applying it. Changing the name renders a new
+Certificate/Secret target; it does not rename or migrate an existing Secret.
+For a domain migration, choose a distinct `tls.secretName` for the replacement
+certificate so provisioning it first does not overwrite the active target.
+Rendering neither issues keys nor updates live consumers. Applying a new
+Certificate, changing live TLS references, issuing or copying private keys, or
+retiring old resources needs a separately approved migration with certificate
+readiness and service verification. The fresh-install default is not approval
+to migrate this installation's active TLS.
+
 ## Prerequisites
 
 - The `docker-desktop` Kubernetes context is selected and its node is Ready.

@@ -18,7 +18,8 @@ type siteProfile struct {
 		Infisical string `json:"infisical"`
 	} `json:"hosts"`
 	TLS struct {
-		Issuer struct {
+		SecretName string `json:"secretName,omitempty"`
+		Issuer     struct {
 			Type           string `json:"type"`
 			Name           string `json:"name"`
 			SelfSignedName string `json:"selfSignedName"`
@@ -106,8 +107,12 @@ func render(profile siteProfile, domainOverride string) (output, error) {
 	if !seen[defaultNS] {
 		return output{}, errors.New("default TLSStore namespace needs its own Certificate and Secret")
 	}
-	secretName := strings.ReplaceAll(domain, ".", "-") + "-tls"
-	if err := validName(secretName, "generated TLS Secret name", false); err != nil {
+	secretName := profile.TLS.SecretName
+	if secretName == "" {
+		// Preserve the naming convention of profiles created before tls.secretName.
+		secretName = strings.ReplaceAll(domain, ".", "-") + "-tls"
+	}
+	if err := validName(secretName, "TLS Secret name", false); err != nil {
 		return output{}, err
 	}
 	grafanaHost := profile.Hosts.Grafana + "." + domain

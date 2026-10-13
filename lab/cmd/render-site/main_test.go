@@ -30,14 +30,37 @@ func object(t *testing.T, value any) map[string]any {
 	return result
 }
 
+func assertTLSName(t *testing.T, result output, namespaces []string, want string) {
+	t.Helper()
+	if result.summary["secretName"] != want {
+		t.Fatalf("unexpected Secret: %v; want %s", result.summary["secretName"], want)
+	}
+	for _, namespace := range namespaces {
+		certificate := object(t, result.resources["10-certificate-"+namespace+".json"])
+		if object(t, certificate["metadata"])["name"] != want || object(t, certificate["spec"])["secretName"] != want {
+			t.Fatalf("Certificate in %s does not use %s", namespace, want)
+		}
+	}
+	storeSpec := object(t, object(t, result.resources["20-default-tlsstore.json"])["spec"])
+	if object(t, storeSpec["defaultCertificate"])["secretName"] != want {
+		t.Fatal("TLSStore does not use the selected certificate name")
+	}
+	for _, name := range []string{"grafana-values.json", "infisical-values.json"} {
+		ingress := object(t, object(t, result.overlays[name])["ingress"])
+		tls, ok := ingress["tls"].([]any)
+		if !ok || len(tls) != 1 || object(t, tls[0])["secretName"] != want {
+			t.Fatalf("%s does not use the selected certificate name", name)
+		}
+	}
+}
+
 func TestCurrentSiteAndFallbackCertificate(t *testing.T) {
-	result, err := render(loadProfile(t), "")
+	profile := loadProfile(t)
+	result, err := render(profile, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.summary["secretName"] != "local-dev-tls" {
-		t.Fatalf("unexpected Secret: %v", result.summary["secretName"])
-	}
+	assertTLSName(t, result, profile.TLS.CertificateNamespaces, "kubedesk-local-tls")
 	storeSpec := object(t, object(t, result.resources["20-default-tlsstore.json"])["spec"])
 	certSpec := object(t, object(t, result.resources["10-certificate-kube-system.json"])["spec"])
 	if object(t, storeSpec["defaultCertificate"])["secretName"] != certSpec["secretName"] {
@@ -56,6 +79,7 @@ func TestCurrentSiteAndFallbackCertificate(t *testing.T) {
 
 func TestAlternateDomainAndExistingIssuer(t *testing.T) {
 	profile := loadProfile(t)
+	profile.TLS.SecretName = "" // Older profiles keep their domain-derived name.
 	profile.TLS.Issuer.Type = "existing"
 	profile.TLS.Issuer.Name = "acme-dns01"
 	result, err := render(profile, "example.internal")
@@ -106,6 +130,7 @@ func TestRerenderRemovesStaleCAResources(t *testing.T) {
 	}
 	profile.TLS.Issuer.Type = "existing"
 	profile.TLS.Issuer.Name = "acme-dns01"
+	profile.TLS.SecretName = ""
 	alternate, err := render(profile, "example.internal")
 	if err != nil {
 		t.Fatal(err)
@@ -122,5 +147,48 @@ func TestRerenderRemovesStaleCAResources(t *testing.T) {
 	}
 	if value != "example-internal-tls" {
 		t.Fatalf("summary returned profile default instead of rendered value: %s", value)
+	}
+}
+
+func TestLegacyProfileKeepsDomainDerivedTLSName(t *testing.T) {
+	profile := loadProfile(t)
+	profile.TLS.SecretName = ""
+	for _, test := range []struct{ domain, want string }{
+		{"", "local-dev-tls"},
+		{"example.internal", "example-internal-tls"},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			result, err := render(profile, test.domain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertTLSName(t, result, profile.TLS.CertificateNamespaces, test.want)
+		})
+	}
+}
+
+func TestExplicitTLSNameSurvivesDomainOverride(t *testing.T) {
+	profile := loadProfile(t)
+	profile.TLS.SecretName = "custom-certificate"
+	profile.TLS.Issuer.Type = "existing"
+	profile.TLS.Issuer.Name = "acme-dns01"
+	result, err := render(profile, "example.internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTLSName(t, result, profile.TLS.CertificateNamespaces, "custom-certificate")
+	certificate := object(t, result.resources["10-certificate-kube-system.json"])
+	if object(t, certificate["spec"])["commonName"] != "example.internal" {
+		t.Fatal("explicit certificate name suppressed the domain override")
+	}
+}
+
+func TestInvalidExplicitTLSNameFailsClosed(t *testing.T) {
+	for _, name := range []string{"Bad_Name", "-invalid", "name with spaces", strings.Repeat("a", 254)} {
+		profile := loadProfile(t)
+		profile.TLS.SecretName = name
+		if _, err := render(profile, ""); err == nil || !strings.Contains(err.Error(), "TLS Secret name") {
+			t.Fatalf("invalid name %q: expected TLS name error, got %v", name, err)
+		}
 	}
 }

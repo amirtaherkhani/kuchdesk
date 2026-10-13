@@ -5,6 +5,7 @@
     "infisical": "infisical"
   },
   "tls": {
+    "secretName": "kubedesk-local-tls",
     "issuer": {
       "type": "private-ca",
       "name": "local-dev-ca",

@@ -4,85 +4,140 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-13
+
 ### Changed
 
-- Open the official Infisical login URL automatically on macOS, retain a clear manual-link fallback, and emit credential-free callback stages for troubleshooting.
-
-- Select the Infisical host credential backend explicitly: project-local `.env` by default or an existing macOS Keychain item. Remove the global `host.env` setup command and automatic environment/file fallback; no credentials are provisioned or migrated.
-- Document the verified host bridge and Infisical-to-Helm runtime, including the project membership boundary that prevents unverified automatic all-project grants.
+- Rename KubeDeck to KuchDesk across Go modules, binaries, chart/resources,
+  environment variables, API identities, documentation and the macOS job.
+  The agent chart is 0.13.0 and its app version is 0.10.0.
+- Require Go 1.25 for the Host module and Go 1.26 for the Kubernetes module;
+  building all modules requires Go 1.26 or newer.
+- Select Host Infisical credentials explicitly: project-local `.env` by default
+  or an existing macOS Keychain item. Remove global `host.env` setup and
+  automatic backend fallback; credentials are not provisioned or migrated.
+- Persist Grafana's completed homelab native-auth handoff with v1beta1
+  Connection/Auth/StaticSecret resources, the existing
+  `platform-secrets/kubedesk-infisical-reader`, one writer and Orphan retention
+  for `grafana-admin`. Portable development and explicit Universal Auth remain.
+- Limit Operator source scope to `platform-secrets` and `observability`; remove
+  retired `development-tools` manager RBAC and policy entries. Empty manager
+  TokenRequest lists do not replace the dedicated reader's limited grants.
+- Preserve agent, k6 and Traefik namespace routing through scoped renderers,
+  retaining existing Helm records. Record the completed retired-namespace
+  migration and its guarded recovery constraints.
+- Keep development dashboards in Platform with stable UIDs and source ownership.
+  Use a native sidecar to collect files before Grafana starts, then watch updates
+  for its 30-second file poll without admin reload credentials.
+- Preserve homelab anonymous Editor access, Loki 72h, Prometheus 3d,
+  Alertmanager 72h and Tempo's existing 72h retention. Use the scoped monitoring
+  rule renderer and the pinned Loki chart's supported sidecar schema.
+- Add optional `tls.secretName`, consistently used by leaf Certificates,
+  TLSStore, application overlays and summary. The fresh-install profile selects
+  `kubedesk-local-tls`; omitted/empty fields retain domain-derived names and
+  explicit names survive a domain override. The source update alone does not
+  migrate other existing installations' active certificates, keys, issuers or
+  TLS routes. This development cluster completed a separately approved migration
+  to `kubedesk-local-tls`: its three new Certificates are Ready, trusted HTTPS
+  health checks pass and the three old `local-dev-tls` pairs remain for rollback.
+- Require source-traceable immutable image tags and digest-pinned deployment.
+  Build/KIND reuse checks exact inputs, provenance, platform and store content;
+  mutable references retain refresh behavior. Local image retirement requires
+  ownership, unused-reference and verified recovery checks.
+- Configure Host DNS TTL, timeout, polling interval, zone, context and interface;
+  pin the installer-selected `kubectl` path.
 
 ### Added
 
-- Add `./infisical-login`, resolving project settings and opening a fresh official browser login with automatic callback and hidden Copy-to-clipboard recovery in one process.
-
-- Add a user-run Infisical v0.151.0 browser login callback with private session persistence and read-only server-authority status. Dry-run enrollment now explicitly reports human authority as not checked.
-
-- Add an offline, checksum-pinned Infisical Operator chart preparation workflow and typed TokenRequest permission checks. The proposed namespace/account restrictions require separate live rollout approval.
-
-- Add an opt-in Infisical-to-Helm integration probe that checks Operator sync,
-  a Kubernetes Secret reference, and workload readiness without placing a
-  secret value in Helm. Scope the Operator to `development-tools` for this test.
-- Add a disabled-by-default HTTPS host control plane for typed Infisical
-  management and Doctor checks, plus an authenticated TLS bridge in the
-  Kubernetes agent. Helm uses only Secret and CA ConfigMap references; no
-  Infisical bootstrap credential enters a Pod or Helm release.
-- Add credential-free Doctor MCP scopes: `doctor-repair` retains the guarded deployment workflow, while `doctor-readonly` exposes diagnosis and verification only; neither scope is registered in a live MCP client.
-- Add typed Kubernetes Job status, manual CronJob run, and guarded Job deletion endpoints; responses exclude Pod templates and support dry-run writes.
-- Add opt-in WebSocket Pod port-forwarding to the Kubernetes agent with exact Pod confirmation, loopback-only tunnel setup, bounded sessions, and no new Service port or RBAC grant.
-- Add opt-in, noninteractive Kubernetes Pod exec with bearer authentication, Pod identity confirmation, bounded output, concurrency and timeout. It is disabled in chart defaults and adds no RBAC grant.
-- Add a read-only Infisical CLI project-access check that separates identity-scoped listing from project-detail authorization and never returns API error bodies.
-- Add a scoped site-profile configuration CLI with snapshot, strict validation, field diff, dry-run, revision-confirmed apply, private rollback, and concurrent-write protection; live infrastructure still uses explicit deployment workflows.
-- Add a project-local, Git-ignored `.env` credential reader shared by the Infisical CLI and MCP, with an explicit macOS Keychain backend and no automatic fallback.
-- Gate local build and Helm apply on read-only Doctor checks for DNS, Docker/KIND, registry, disk, and node resource use; deployment profiles now require an explicit preflight domain and registry URL.
-- Add a Doctor CLI and MCP diagnostic tool with structured, redacted checks; expose an MCP prompt, JSON schema, typed repair-plan validation, and fresh post-action verification through the existing AI harness.
-- Add a local stdio Infisical MCP server with typed capability discovery and name-only secret listing. Its Universal Auth client renews short-lived access tokens in memory; no identity or live service is provisioned.
-- Share Infisical name-listing logic between a noninteractive CLI and MCP; add bounded in-process start/status/cancel tools for concurrent MCP requests without a separate task service.
-- Add bounded asynchronous scale/restart operations to the management-enabled Kubernetes agent, with per-workload serialization, status, deadlines, and cancellation.
-- Add a host-side build/push/Helm/rollout CLI with an explicit profile, plan mode, revision check, image digest pin, and fail-fast behavior. It is not installed or run against the live cluster.
-- Add an opt-in MCP deployment operation backed by the same local profile workflow and bounded in-process runner, with plan, start, status, and cancel tools.
-- Document required MCP access to the proposed host-side Infisical service, unattended Universal Auth, Helm/Kubernetes Secret delivery, capability boundaries, and phased acceptance criteria. This is a plan; no new service or identity is deployed.
-- Render site-specific HTTPS certificates, Traefik fallback TLS, and Grafana/Infisical domain overlays from one validated Go-powered profile. Support a different DNS zone and an existing external ClusterIssuer without editing application manifests.
-- Scrape the existing macOS node_exporter and probe Technitium's site and recursive DNS plus Docker Desktop's host DNS path from Prometheus, with a Grafana Host and DNS dashboard.
+- Add official browser Admin login through `./infisical-login` and Host
+  `admin-login`, automatic macOS opening, private callbacks, hidden
+  Copy-to-clipboard recovery and server-checked human authority. Enrollment
+  dry runs report authority as unchecked; live reconciliation follows an
+  explicit project-access policy.
+- Add shared Infisical CLI/MCP commands, name-only reads, project-access
+  diagnostics, in-memory short-lived token renewal and bounded asynchronous
+  start/status/cancel operations.
+- Add an opt-in authenticated Host HTTPS bridge for Infisical metadata and
+  Doctor, with project allowlists and a read-only Kubernetes proxy. Host
+  administration uses scoped local CLI/MCP; bootstrap credentials stay off Pods
+  and Helm values. Document explicit project onboarding.
+- Add redacted Host/cluster Doctor diagnostics, typed repair-plan validation,
+  MCP prompt/schema and separate readonly/repair scopes. Gate build/Helm apply
+  on DNS, Docker/KIND, registry, disk and node checks with explicit preflight
+  domain and registry URL.
+- Add a deployment CLI and opt-in MCP plan/start/status/cancel workflow with
+  source-revision validation, image build/push, digest staging, Helm apply and
+  rollout checks. Add provenance-bound build reuse and per-node KIND content
+  verification, plus scoped recovery helpers for retired images and Alloy.
+- Add guarded metadata-only Job status, confirmed CronJob execution and Job
+  deletion with UID/resourceVersion checks and dry runs. Add bounded async
+  scale/restart, opt-in WebSocket Pod tunnels and noninteractive Pod exec;
+  exec stays disabled by default.
+- Add site rendering for DNS/TLS and an existing external issuer, plus profile
+  snapshot/validation/diff/dry-run, revision-confirmed apply, private rollback
+  and concurrent-write protection. Live infrastructure follows explicit workflows.
+- Add macOS host metrics, Technitium site/recursion DNS probes and the Host and
+  DNS dashboard; queries follow the rendered site domain.
+- Add offline checksum-pinned Operator scope preparation and permission checks,
+  and an opt-in Infisical-to-Helm probe without secret values in Helm inputs.
+  Its historical namespace is outside the current Operator scope.
+- Add interactive Grafana bootstrap-password retrieval and guarded database
+  password reset, plus an anonymous dashboard helper that reconciles Platform
+  resources while preserving omitted fields and server normalization.
 
 ### Fixed
 
-- Apply enrollment interval edits to the active wait without restarting the controller, preserving elapsed time, retry backoff and server Retry-After limits.
-
-- Avoid declaring JSON on bodyless Infisical auth requests, fixing the deployed empty-JSON parser rejection; report sanitized HTTP status and fixed auth endpoint on failure.
-
-- Support the official Infisical browser Copy-to-clipboard fallback through a hidden user-run terminal prompt, with server authority validation before private session persistence.
-
-- Stage a digest-pinned local image through KIND's containerd before registering it with CRI, avoiding a direct CRI manifest short-read while preserving the kubelet visibility gate.
-- Resolve the informational Kubernetes capability catalog from one complete rules review, with exact access-review fallback when rules are incomplete or unavailable.
-- Pre-pull digest-pinned KIND images through kubelet's CRI so `image.pullPolicy=Never` recognizes them during Helm rollouts.
-- Bound parallel authorization reviews for the Kubernetes management capability catalog and make Helm installation notes describe the actual RBAC and CoreDNS values.
-- Push locally built images through the macOS host's port-forwarded registry using `crane`, with optional digest pre-pull on dynamically discovered KIND nodes before Helm runs. A temporary Pod verified kubelet image pull and container creation with cached layers.
-- Manage opt-in CoreDNS service aliases on Docker Desktop KIND through a bounded block in the existing Corefile, preserving unrelated directives and rejecting stale or unsafe updates.
-- Let new Infisical PostgreSQL installations use the cluster's default StorageClass instead of assuming K3s `local-path`; preserve the existing StatefulSet and PVC during upgrades.
-- Let the Kubernetes agent use a developer's kubeconfig when no in-cluster credentials exist, with an explicit context override and multi-file `KUBECONFIG` support.
-- Handle Ingress resource backends without crashing the cluster snapshot or assigning their URLs to unnamed Services.
-- Reject ambiguous private IPv4 addresses on the selected Mac interface instead of publishing an arbitrary DNS answer.
-- Include a cert-manager Certificate in the default TLSStore namespace so Traefik's fallback certificate references a Secret that cert-manager can issue.
-- Restore the macOS DNS reconciler with its explicit site zone, Kubernetes context, and physical LAN interface when a VPN owns the default route.
-
-### Changed
-
-- Require Go 1.25 for the host-agent module to use the official MCP Go SDK.
-- Let operators configure the host DNS record TTL, run timeout, and macOS polling interval; pin the installed `kubectl` executable for launchd runs.
-- Rename the repository, both agents, Helm chart, API identity, and macOS integration to KuchDesk. The agent chart is now 0.9.0 and its app version is 0.6.0.
-- Remove embedded `local.dev` hostnames from deployment values and static TLS manifests. Document certificate-first domain migration and application configuration rollouts.
+- Reload enrollment interval waits without restarting, preserving elapsed time,
+  retry backoff and server Retry-After limits. Omit JSON content type on bodyless
+  Infisical auth requests and keep browser recovery within verified authority.
+- Push images through the Host's local `crane` registry route, stage digests in
+  KIND containerd and register/pre-pull through CRI before Never-policy rollouts.
+  Restore missing per-node content before reuse.
+- Resolve the capability catalog from rules review with bounded access-review
+  fallback, and document the chart's actual RBAC and CoreDNS settings.
+- Manage only a marked block of the existing CoreDNS Corefile with dry runs,
+  optimistic concurrency and refusal of unmanaged rewrites.
+- Use the default StorageClass for fresh Infisical PostgreSQL installations,
+  preserving existing StatefulSet/PVC templates.
+- Support explicit local kubeconfig contexts and multi-file `KUBECONFIG`;
+  handle Ingress resource backends without crashing resource snapshots.
+- Refuse ambiguous private Host addresses and use an explicit physical
+  interface when a VPN owns the default route.
+- Render a matching leaf Certificate for the fallback TLSStore namespace.
+- Preserve dashboard schema/default fields and ignore storage metadata on
+  reconcile; wait for initial file collection before starting Grafana.
 
 ### Breaking Changes
 
-- DNS management now targets `kube-system/coredns` key `Corefile`. Replace `KUCHDESK_COREDNS_CUSTOM_CONFIGMAP` and `KUCHDESK_COREDNS_OVERRIDE_KEY` with `KUCHDESK_COREDNS_CONFIGMAP` and `KUCHDESK_COREDNS_COREFILE_KEY`. Old Helm `dnsManagement.overrideKey` and `createConfigMap` values are rejected.
-- The Kubernetes agent Go module, chart/release name, resource names, `KUCHDESK_*` environment variables, `kuchdesk.io/v1alpha1` snapshot identity, and `X-KuchDesk-Confirm` request header replace their former KubeDeck equivalents. Client integrations and existing agent installations must update together.
-- The macOS LaunchAgent label and binary name change to `dev.kuchdesk.host-agent` and `kuchdesk-host-agent`. The installer does not remove an existing KubeDeck job.
+- DNS writes target the existing `kube-system/coredns` Corefile. Replace legacy
+  custom ConfigMap/override settings with `KUCHDESK_COREDNS_CONFIGMAP` and
+  `KUCHDESK_COREDNS_COREFILE_KEY`; obsolete Helm `dnsManagement.overrideKey` and
+  `createConfigMap` values are rejected.
+- KuchDesk module/chart/resource names, `KUCHDESK_*`, `kuchdesk.io/v1alpha1`
+  and `X-KuchDesk-Confirm` replace KubeDeck equivalents. Upgrade client
+  integrations, agent references and the renamed authentication Secret together.
+- The macOS job/binary become `dev.kuchdesk.host-agent` and
+  `kuchdesk-host-agent`; installation does not remove the old job automatically.
+- The development dashboard watcher requires Kubernetes native-sidecar support.
 
 ### Migration
 
-- Back up the existing Corefile, enable DNS writes only after a dry run, and remove old alias overrides through a separate reviewed change if present. Never reapply the changed Infisical PostgreSQL StatefulSet template over an existing installation; its volume claim template is immutable.
-- Update imports, Helm paths, image references, bearer Secret names, and agent environment variables. Recreate or explicitly migrate the old chart release and Secret; Helm treats the renamed chart as a separate release. Preserve the existing CoreDNS override until the new agent and aliases are verified.
-- Stop the old macOS LaunchAgent before installing the new one with the same DNS zone, context, and interface. Verify DNS resolution, then remove the old job and binary. Preserve retained PVCs when renaming local Kubernetes resources.
+- Back up CoreDNS and review a dry run before enabling aliases. Do not reapply
+  changed PostgreSQL claim templates to an existing StatefulSet; preserve PVCs
+  and use a separate storage migration.
+- Migrate the renamed chart/release and Secret explicitly; keep old resources
+  until their replacements are verified. Stop the old macOS job before
+  installing its replacement with the same zone, context and interface.
+- Existing installations without a completed approved TLS migration must retain
+  their current TLS name explicitly before using the updated profile, for example
+  `tls.secretName: "local-dev-tls"`. A live name migration, key issuance/copying
+  or old-resource retirement needs separate approved scope.
+- Other installations must supply their own native-auth identity/reader. Do not
+  repeat the completed alpha writer handoff, restore retired namespaces, or
+  use historical Helm revisions as a blind rollback.
+- Probe namespace/access and shared database/messaging proposals remain separate
+  setup decisions. Image cleanup must preserve referenced or unique content
+  until recovery or exact discard approval is established.
 
 ## [0.9.0] - 2026-10-09
 
@@ -274,3 +329,5 @@ All notable KuchDesk changes are documented in this file.
 [0.7.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.6.0...v0.7.0
 [0.8.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.7.0...v0.8.0
 [0.9.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.8.0...v0.9.0
+[0.10.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.9.0...v0.10.0
+[Unreleased]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.10.0...main

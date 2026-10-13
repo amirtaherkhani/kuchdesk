@@ -15,6 +15,7 @@ import (
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/deploy"
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/doctor"
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/infisical"
+	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/mcpaccess"
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/platform"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -423,6 +424,8 @@ func main() {
 	manage := flag.Bool("manage", false, "expose scoped Infisical management commands in all scope")
 	projects := flag.String("project-ids", "", "comma-separated Infisical project ID allowlist for management")
 	allowProjectCreate := flag.Bool("allow-project-create", false, "allow organization-level project creation")
+	projectPolicy := flag.String("project-policy", "", "path to the existing private Host enrollment policy (opt-in dynamic MCP policy)")
+	clientContext := flag.String("client-context", "", "trusted MCP client context key configured in the Host policy")
 	flag.Parse()
 	if (*scope != "all" && *scope != "doctor-repair" && *scope != "doctor-readonly") || flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "provide a valid -scope and no positional arguments")
@@ -430,6 +433,14 @@ func main() {
 	}
 	if *manage && *scope != "all" {
 		fmt.Fprintln(os.Stderr, "Infisical management requires -scope all")
+		os.Exit(2)
+	}
+	if (*projectPolicy == "") != (*clientContext == "") || ((*projectPolicy != "" || *clientContext != "") && !*manage) {
+		fmt.Fprintln(os.Stderr, "-project-policy and -client-context must be used together with -manage")
+		os.Exit(2)
+	}
+	if *projectPolicy != "" && *allowProjectCreate {
+		fmt.Fprintln(os.Stderr, "-allow-project-create is unavailable with dynamic project policy")
 		os.Exit(2)
 	}
 	var service *infisical.Service
@@ -461,11 +472,20 @@ func main() {
 				allowed[id] = true
 			}
 		}
-		if len(allowed) == 0 && !*allowProjectCreate {
+		if len(allowed) == 0 && !*allowProjectCreate && *projectPolicy == "" {
 			fmt.Fprintln(os.Stderr, "Infisical management requires a project allowlist")
 			os.Exit(2)
 		}
-		registerInfisicalManagement(server, infisical.CommandService{Client: client, AllowedProjects: allowed, AllowProjectCreate: *allowProjectCreate})
+		commands := infisical.CommandService{Client: client, AllowedProjects: allowed, AllowProjectCreate: *allowProjectCreate}
+		if *projectPolicy != "" {
+			authorizer, err := mcpaccess.NewAuthorizer(*projectPolicy, *clientContext, client)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "invalid dynamic MCP project policy:", err)
+				os.Exit(2)
+			}
+			commands.MCPPolicy = authorizer
+		}
+		registerInfisicalManagement(server, commands)
 	}
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "Infisical MCP server stopped")

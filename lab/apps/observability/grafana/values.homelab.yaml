@@ -7,12 +7,12 @@ image:
   pullPolicy: IfNotPresent
 
 infisical:
-  authMethod: universalAuth # Opt in to kubernetesAuth only after approved identity/RBAC setup.
+  authMethod: kubernetesAuth # Approved homelab v1beta1 writer; see migration completion notes.
   kubernetesAuth:
-    identityId: "" # Immutable ID returned by approved enrollment, never a display name.
+    identityId: d05fbb07-7b0c-402a-888d-980b9ac06cde # Existing public identity UUID, not a credential.
     serviceAccountRef:
-      name: ""
-      namespace: ""
+      name: kubedesk-infisical-reader
+      namespace: platform-secrets
     serviceAccountTokenAudiences: [] # API-server default audience.
   projectSlug: home-lab-nb0-k # Kubedesk Platform; retain until coordinated slug migration
   envSlug: dev # Matches the verified live selector; explicit deployment overrides still win.

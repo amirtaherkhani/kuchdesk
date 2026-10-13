@@ -2,7 +2,6 @@
   "operatorNamespace": "platform-secrets",
   "operatorServiceAccount": "infisical-opera-controller-manager",
   "namespaceAccounts": {
-    "development-tools": ["kubedesk-infisical-reader"],
     "observability": [],
     "platform-secrets": []
   }

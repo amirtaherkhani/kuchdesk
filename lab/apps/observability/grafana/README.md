@@ -24,16 +24,37 @@ must never be committed to this repository. Supply the active Infisical project
 and environment with `--set-string infisical.projectSlug=...` and
 `--set-string infisical.envSlug=...` when deploying this chart.
 
-Native Kubernetes auth is opt-in via `infisical.authMethod=kubernetesAuth`. Set
-`infisical.kubernetesAuth.identityId` to the approved identity UUID and provide
-`serviceAccountRef.name` and `.namespace` under the same key. The Operator requests
-short-lived tokens; no Universal Auth credential reference is rendered in this
-mode. The default remains `universalAuth`. Unknown modes or missing native fields
-fail rendering. Prepare the service account, TokenRequest/TokenReview permissions
-and Infisical auth configuration from the [activation plan](../../../../docs/infisical-activation-plan.md)
-before applying. Template tests verify auth changes do not change either Grafana
-Deployment; keep the existing managed Secret during cutover. The checked-in
-homelab environment now matches the verified live `dev` scope.
+The homelab profile now selects the completed `kubernetesAuth` migration, using
+existing identity UUID `d05fbb07-7b0c-402a-888d-980b9ac06cde` and
+`platform-secrets/kubedesk-infisical-reader` with the API-server default audience
+(`[]`). The UUID is a public identifier, not a credential. The chart fallback
+and portable `values.development.yaml` profile retain `universalAuth`; explicit
+Universal Auth remains supported. Other environments must supply their own
+approved identity/reader settings. Unknown modes or missing native fields fail
+rendering. The [earlier activation plan](../../../../docs/infisical-activation-plan.md)
+is historical context with retired alpha/namespace steps; do not replay it.
+Another installation needs separately reviewed v1beta1 Connection/Auth/StaticSecret
+resources and dedicated TokenRequest/TokenReview permissions for its approved reader.
+
+Kubernetes auth renders the installed operator's v1beta1 Connection/Auth/StaticSecret
+resources and an identity-reference Secret containing only the existing UUID.
+The operator obtains fresh short-lived Kubernetes tokens. The target uses
+`creationPolicy: Orphan`, the same `grafana-admin` Secret/type, one-minute polling,
+source scope and all source keys. The homelab selector remains the verified live
+`dev` environment. No Universal Auth credential reference is rendered in native
+mode. Template tests preserve all other chart resources, including both
+Deployments, dashboard provisioning and anonymous Editor access.
+
+The existing installation completed this handoff at Grafana Helm revision 7;
+see the [namespace migration completion](../../../migrations/retired-namespaces/README.md).
+Do not repeat adoption or deletion on this already migrated installation.
+For an older alpha installation only, a separately approved and UID-guarded
+handoff must orphan-delete the old `InfisicalSecret/grafana-admin` and verify the
+managed Secret retains its UID before creating the sole beta writer. Never flip
+the alpha writer's creation policy from Owner to Orphan: reconciliation can delete
+the still-owned Secret. Never run both writers. The completed release adopted
+only four reviewed resources: identity-reference Secret, InfisicalConnection,
+InfisicalAuth and InfisicalStaticSecret; no blanket takeover was used.
 
 ## Durable development dashboard access
 

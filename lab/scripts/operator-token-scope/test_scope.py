@@ -20,6 +20,8 @@ VALUES = HERE.parents[1] / "apps/platform/infisical-operator/values.yaml"
 class PermissionTests(unittest.TestCase):
     def test_review_uses_named_token_subresource_and_serviceaccount_groups(self):
         policy = prepare.load_policy(HERE / "policy.json")
+        # Exercise named positive grants independently of the live manager policy.
+        policy["namespaceAccounts"]["platform-secrets"] = ["approved-fixture-reader"]
         seen = []
         def server(body):
             attrs = body["spec"]["resourceAttributes"]
@@ -31,15 +33,22 @@ class PermissionTests(unittest.TestCase):
             self.assertIn("system:serviceaccounts:platform-secrets", body["spec"]["groups"])
             self.assertIn("system:authenticated", body["spec"]["groups"])
             seen.append((attrs["namespace"], attrs["name"]))
-            return attrs["namespace"] == "development-tools" and attrs["name"] == "kubedesk-infisical-reader"
+            return attrs["namespace"] == "platform-secrets" and attrs["name"] == "approved-fixture-reader"
         reports = permissions.check(policy, server)
-        self.assertEqual(len(reports), 4)
+        self.assertEqual(len(reports), 3)
         self.assertTrue(all(r["passed"] for r in reports))
         self.assertEqual({ns for ns, _ in seen}, set(policy["namespaceAccounts"]))
 
     def test_preexisting_broad_access_fails_negative_checks(self):
         reports = permissions.check(prepare.load_policy(HERE / "policy.json"), lambda _: True)
-        self.assertEqual(sum(not r["passed"] for r in reports), 3)
+        self.assertEqual(sum(not r["passed"] for r in reports), 2)
+
+    def test_current_manager_policy_has_two_namespaces_and_no_token_grants(self):
+        policy = prepare.load_policy(HERE / "policy.json")
+        self.assertEqual(policy["namespaceAccounts"], {"observability": [], "platform-secrets": []})
+        reports = permissions.check(policy, lambda _: False)
+        self.assertEqual(len(reports), 2)
+        self.assertTrue(all(r["passed"] and not r["expectedAllowed"] for r in reports))
 
     def test_incomplete_authorization_result_is_not_a_deny(self):
         with patch("check_permissions.subprocess.run") as runner:
@@ -120,28 +129,25 @@ class HelmTests(unittest.TestCase):
             text = text.replace(rule, "")
         return re.sub(r"\n{2,}", "\n", text).strip()
 
-    def test_only_three_token_rules_change_in_entire_release(self):
+    def test_only_two_token_rules_change_in_entire_release(self):
         before = self.documents(self.render(self.archive))
         after = self.documents(self.render(self.chart))
         self.assertEqual(set(before), set(after))
         changed = {k for k in before if before[k] != after[k]}
-        self.assertEqual(changed, {("Role", "infisical-opera-manager-role", ns) for ns in ["development-tools", "observability", "platform-secrets"]})
+        self.assertEqual(changed, {("Role", "infisical-opera-manager-role", ns) for ns in ["observability", "platform-secrets"]})
         for key in changed:
             self.assertEqual(self.strip_token_rule(before[key]), self.strip_token_rule(after[key]))
             self.assertEqual(len(self.token_rules(before[key])), 1)
             rules = self.token_rules(after[key])
-            if key[2] == "development-tools":
-                self.assertEqual(len(rules), 1)
-                self.assertIn("resourceNames:\n  - kubedesk-infisical-reader", rules[0])
-            else:
-                self.assertEqual(rules, [])
+            self.assertEqual(rules, [])
 
     def test_missing_scope_unknown_namespace_and_bad_account_fail_closed(self):
         self.render(self.chart, "--set", "scopedRBAC=false", success=False)
         self.render(self.chart, "--namespace", "wrong-namespace", success=False)
         self.render(self.chart, "--set-string", "controllerManager.serviceAccount.name=wrong-account", success=False)
         self.render(self.chart, "--set-json", 'kuchdeskTokenRequestAccounts={"unknown":[]}', success=False)
-        self.render(self.chart, "--set-json", 'kuchdeskTokenRequestAccounts.development-tools=["*"]', success=False)
+        self.render(self.chart, "--set-json", 'kuchdeskTokenRequestAccounts.observability=["*"]', success=False)
+        self.render(self.chart, "--set-json", 'kuchdeskTokenRequestAccounts.development-tools=[]', success=False)
 
     def test_future_accounts_require_explicit_policy(self):
         policy = prepare.load_policy(HERE / "policy.json")

@@ -5,29 +5,34 @@ Synchronizes Infisical secret and configuration values into Kubernetes Secrets.
 | Field | Value |
 |---|---|
 | Namespace | `platform-secrets` |
+| Helm release | `infisical-operator`, revision 5 at the completed migration |
+| Chart/application version | `0.11.11` / `v0.11.11`, unchanged |
 | UI | No |
 | Dependency | Infisical backend |
 | Observability | Controller health and metrics when supported |
 
-The operator watches `platform-secrets`, `observability`, and
-`development-tools` for this stack. Grafana's `InfisicalSecret` creates the
-`grafana-admin` Secret; the operator owns its contents. The
-`development-tools` scope supports a separately enabled, value-free Helm
-integration probe. The operator reads its existing Universal Auth Secret in
-`platform-secrets`; the credentials are not copied into an application chart.
+The operator watches only `platform-secrets` and `observability`. Grafana uses
+one v1beta1 `InfisicalStaticSecret/grafana-admin` writer and its Connection/Auth
+resources in `observability`; the existing managed Secret uses Orphan retention.
+The former `development-tools` scope and manager Role/RoleBinding were removed.
+Both retired namespaces are absent. See the
+[completed migration](../../../migrations/retired-namespaces/README.md).
 
 ## TokenRequest permission policy
 
-The approved [targeted narrowing](../../../../docs/infisical-tokenrequest-narrowing.md)
-is deployed at Helm revision 4. TokenRequest is limited to
-`development-tools/kubedesk-infisical-reader`; the other two watched namespaces
-have no manager-Role TokenRequest grant. See the
-[observability audit](../../../../docs/infisical-observability-audit-2026-10-10.md).
-No current configured consumer uses Kubernetes auth; preserve Universal Auth until
-the separately approved activation has its required human-session handoff.
+The pinned local chart gives neither manager Role a TokenRequest grant:
+`scripts/operator-token-scope/policy.json` contains exactly the two watched
+namespaces with empty account lists. The approved reader access is separate:
+`platform-secrets/Role kubedesk-infisical-token-request` and its RoleBinding let
+`infisical-opera-controller-manager` request tokens only for
+`platform-secrets/kubedesk-infisical-reader`. Its existing dedicated cluster
+TokenReview grant is also preserved. Do not infer the reader's permission from
+the empty manager-policy lists or add it to those lists as a duplicate grant.
+The Infisical identity accepts this reader in `platform-secrets` only, with the
+existing roles and 900-second TTL unchanged.
 
-For offline preparation, download only the official pinned archive, then run
-from `lab/` (use a new output directory; the builder refuses to overwrite one):
+For offline preparation, use the official checksum-pinned archive already
+verified for this version. From `lab/`, choose a new output directory:
 
 ```sh
 mkdir -p .generated
@@ -39,26 +44,27 @@ helm template infisical-operator .generated/operator-token-scope/secrets-operato
   -f .generated/operator-token-scope/token-request-values.json
 ```
 
-The archive URL and checksum are in the plan. The offline builder changes only
-TokenRequest handling in the existing manager Roles. Do not replace this with a
-bare upstream chart upgrade: it would restore broad access. The local chart and
-explicit values overlay must be used for subsequent approved upgrades.
+The archive checksum is enforced by the offline builder. Its patch changes only
+manager Role TokenRequest handling. Do not replace the local chart with a bare
+upstream upgrade, which restores broad grants. A future upgrade of the existing
+`infisical-operator` release requires its current complete values and resource
+diff to be reviewed first. Do not blindly use `--reuse-values` to remove a
+namespace: obsolete map entries can survive value merging. The completed bounded
+upgrade privately preserved complete values and removed only the old watched
+namespace and matching policy key. Do not replay that migration or an old Helm
+rollback; historical configurations contain retired scope and reader references.
 
-**After the separate security-setting approval and current-state diff checks**,
-the intended command is:
+`check_permissions.py` submits authorization reviews without requesting tokens.
+With the current manager policy it checks two unapproved-name denials only. It
+does not prove the dedicated reader grant, TokenReview permission or old-reader
+denial. Those five bounded allow/deny checks and fresh synchronization after
+960 seconds passed separately during the completed rollout.
 
-```sh
-helm upgrade infisical-operator .generated/operator-token-scope/secrets-operator \
-  -n platform-secrets --reuse-values \
-  -f .generated/operator-token-scope/token-request-values.json --wait
-python3 scripts/operator-token-scope/check_permissions.py
-```
-
-The checker only submits authorization reviews; it never creates tokens. It
-passed all four allow/deny checks after the approved revision-4 rollout. Tests run via
-`go test ./...`; include the pinned chart integration cases with:
+Offline regression checks include the existing pinned archive without downloading
+or contacting Kubernetes:
 
 ```sh
 KUCHDESK_OPERATOR_CHART=/path/to/secrets-operator-0.11.11.tgz \
-  python3 -m unittest discover -s scripts/operator-token-scope -v
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s scripts/operator-token-scope -v
 ```

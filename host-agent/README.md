@@ -157,6 +157,41 @@ This uses the same typed host command service, returns no secret values, and
 is not part of `doctor-repair`. The live MCP registration is `doctor-repair`
 only. Existing Grafana Operator sync remains independent.
 
+An optional dynamic policy can replace the explicit project ID list for a
+separately configured MCP client. It requires both `-project-policy` (the
+existing private Host enrollment policy) and `-client-context` (a trusted
+startup key mapped in that policy), alongside `-scope all -manage`. For
+example, a policy may map `kubedesk` to a stable project ID and set
+`allowCrossProject` only when that client is intended to target other
+identity-visible, Host-allowed projects. Optional per-project modes are
+`identity` (the default), `deny`, `read-only`, and `limited`. Limited
+secret/folder operations require exact environment and path-prefix lists;
+limited environment creation is restricted to listed slugs, while environment
+listing, renaming, and deletion are unavailable in limited mode.
+Project IDs are intersected with the current Infisical machine-identity
+listing and `include`/`exclude`/`allProjects` Host policy on each command; a
+policy read or identity listing failure denies the command. This policy does
+not enroll identities, change upstream permissions, or grant access. Keep the
+existing `doctor-repair` MCP registration unchanged unless separately
+approved.
+
+Example opt-in MCP policy section:
+
+```json
+"mcpAccess": {
+  "contexts": {
+    "kubedesk": { "targetProjectId": "stable-project-id", "allowCrossProject": false }
+  },
+  "projects": {
+    "stable-project-id": { "mode": "limited", "operations": ["secret.list"], "environments": ["dev"], "pathPrefixes": ["/app"] }
+  }
+}
+```
+
+Start a separately approved MCP process with `-manage -project-policy
+/absolute/path/to/policy.json -client-context kubedesk`. Do not add these flags
+to the live MCP command until that exact activation is approved.
+
 ## Local build and deployment workflow
 
 `cmd/kuchdesk-deploy` is a local operator CLI. Its default mode prints a plan;

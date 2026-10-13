@@ -4,6 +4,17 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-13
+
+### Added
+
+- Add an opt-in dynamic project policy for Infisical MCP management. A trusted
+  startup context maps to an explicit project ID; each command intersects the
+  current machine identity's project listing with Host include/exclude policy.
+  Per-project deny, read-only and limited operation scopes support environment
+  and path constraints. Legacy MCP scope and live `doctor-repair` configuration
+  remain unchanged unless separately activated.
+
 ## [0.10.0] - 2026-10-13
 
 ### Changed

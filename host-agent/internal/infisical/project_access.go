@@ -22,6 +22,32 @@ type ProjectAccess struct {
 	ProjectID    string `json:"projectId,omitempty"`
 }
 
+// ListProjectIDs returns only stable project IDs visible to the current
+// machine identity. Callers use this as one side of an authorization
+// intersection; it does not grant access to any project.
+func (c *Client) ListProjectIDs(ctx context.Context) (map[string]bool, error) {
+	body, err := c.get(ctx, "/api/v1/projects", nil)
+	if err != nil {
+		return nil, err
+	}
+	var listing struct {
+		Projects *[]struct {
+			ID string `json:"id"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &listing); err != nil || listing.Projects == nil {
+		return nil, errors.New("Infisical returned an invalid project list")
+	}
+	ids := make(map[string]bool, len(*listing.Projects))
+	for _, project := range *listing.Projects {
+		if !resourceSegment.MatchString(project.ID) || ids[project.ID] {
+			return nil, errors.New("Infisical returned an invalid project list")
+		}
+		ids[project.ID] = true
+	}
+	return ids, nil
+}
+
 // InspectProjectAccess uses only project metadata reads. Infisical v0.151.0
 // lists identity projects through explicit project memberships, independently
 // of the identity's organization role.

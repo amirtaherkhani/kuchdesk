@@ -59,6 +59,32 @@ func TestProjectAccessMatrix(t *testing.T) {
 	}
 }
 
+func TestListProjectIDsReturnsStableIDsOnly(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/universal-auth/login" {
+			fmt.Fprint(w, `{"accessToken":"token","expiresIn":60,"tokenType":"Bearer"}`)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/projects" {
+			t.Errorf("unexpected project request: %s %s", r.Method, r.URL.Path)
+		}
+		fmt.Fprint(w, `{"projects":[{"id":"project-1","slug":"one","name":"One"},{"id":"project-2","slug":"two","secretValue":"never-return"}]}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "id", "secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := client.ListProjectIDs(context.Background())
+	if err != nil || !ids["project-1"] || !ids["project-2"] || len(ids) != 2 {
+		t.Fatalf("project ids = %#v, err=%v", ids, err)
+	}
+	encoded, _ := json.Marshal(ids)
+	if strings.Contains(string(encoded), "never-return") || strings.Contains(string(encoded), "One") {
+		t.Fatalf("project metadata leaked through ID listing: %s", encoded)
+	}
+}
+
 func TestProjectAccessRejectsUnsafeAndInvalidResponses(t *testing.T) {
 	tests := []struct {
 		name, listing, detail string

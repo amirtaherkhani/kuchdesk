@@ -16,6 +16,13 @@ var ErrInvalidCommand = errors.New("invalid Infisical command")
 var ErrProjectDenied = errors.New("Infisical project is not in the host allowlist")
 var ErrConfirmation = errors.New("exact Infisical command confirmation required")
 
+// CommandAuthorizer resolves a trusted MCP context and applies dynamic policy.
+// It returns the command with its project target resolved and the current
+// identity/host-policy intersection for list filtering.
+type CommandAuthorizer interface {
+	Authorize(context.Context, Command) (Command, map[string]bool, error)
+}
+
 // Command is the common, versioned host/MCP/cluster contract. Value is input
 // only: results and logs must never serialize it. Names are always scoped to
 // an explicit project, environment, and path where the upstream API needs it.
@@ -64,18 +71,45 @@ type CommandService struct {
 	AllowedProjects    map[string]bool
 	AllowProjectCreate bool
 	ProjectPolicy      interface{ Projects() map[string]bool }
+	MCPPolicy          CommandAuthorizer
 	ReadOnly           bool
 }
 
 func (s CommandService) Execute(ctx context.Context, command Command) (CommandResult, error) {
+	if s.Client == nil {
+		return CommandResult{}, ErrNotConfigured
+	}
+	if s.MCPPolicy != nil {
+		resolved, allowed, err := s.MCPPolicy.Authorize(ctx, command)
+		if err != nil {
+			return CommandResult{}, err
+		}
+		command = resolved
+		// Every configured/static boundary is an intersection. Dynamic policy
+		// cannot expand a narrower legacy allowlist or host-bridge view.
+		for id := range allowed {
+			if len(s.AllowedProjects) > 0 && !s.AllowedProjects[id] {
+				delete(allowed, id)
+			}
+		}
+		if s.ProjectPolicy != nil {
+			hostAllowed := s.ProjectPolicy.Projects()
+			for id := range allowed {
+				if !hostAllowed[id] {
+					delete(allowed, id)
+				}
+			}
+		}
+		s.AllowedProjects = allowed
+		if command.Operation == "project.create" {
+			return CommandResult{}, ErrProjectDenied
+		}
+	}
 	if s.ReadOnly && !ReadOperation(command.Operation) {
 		return CommandResult{}, ErrProjectDenied
 	}
-	if s.ProjectPolicy != nil {
+	if s.ProjectPolicy != nil && s.MCPPolicy == nil {
 		s.AllowedProjects = s.ProjectPolicy.Projects()
-	}
-	if s.Client == nil {
-		return CommandResult{}, ErrNotConfigured
 	}
 	target, write, err := validateCommand(command)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,19 +22,124 @@ var ErrUnavailable = errors.New("temporarily_unavailable")
 // Policy is local administrator intent, not authority inferred from discovery.
 // Changing organization, identity or version requires restarting the controller.
 type Policy struct {
-	Version           string   `json:"version"`
-	OrganizationID    string   `json:"organizationId"`
-	HostIdentityID    string   `json:"hostIdentityId"`
-	K8IdentityID      string   `json:"k8IdentityId,omitempty"`
-	K8IdentityName    string   `json:"k8IdentityName,omitempty"`
-	CreateK8Identity  bool     `json:"createK8Identity"`
-	Include           []string `json:"include"`
-	Exclude           []string `json:"exclude"`
-	AllProjects       bool     `json:"allProjects"`
-	Apply             bool     `json:"apply"`
-	RepairRevocations bool     `json:"repairRevocations"`
-	IntervalSeconds   int      `json:"intervalSeconds"`
-	MaxProjects       int      `json:"maxProjects"`
+	Version           string           `json:"version"`
+	OrganizationID    string           `json:"organizationId"`
+	HostIdentityID    string           `json:"hostIdentityId"`
+	K8IdentityID      string           `json:"k8IdentityId,omitempty"`
+	K8IdentityName    string           `json:"k8IdentityName,omitempty"`
+	CreateK8Identity  bool             `json:"createK8Identity"`
+	Include           []string         `json:"include"`
+	Exclude           []string         `json:"exclude"`
+	AllProjects       bool             `json:"allProjects"`
+	Apply             bool             `json:"apply"`
+	RepairRevocations bool             `json:"repairRevocations"`
+	IntervalSeconds   int              `json:"intervalSeconds"`
+	MaxProjects       int              `json:"maxProjects"`
+	MCPAccess         *MCPAccessPolicy `json:"mcpAccess,omitempty"`
+}
+
+// MCPAccessPolicy is an optional, local administrator policy for the MCP
+// management surface. It never grants upstream Infisical permissions.
+type MCPAccessPolicy struct {
+	Contexts map[string]MCPContext     `json:"contexts"`
+	Projects map[string]MCPProjectRule `json:"projects,omitempty"`
+}
+
+type MCPContext struct {
+	TargetProjectID   string `json:"targetProjectId"`
+	AllowCrossProject bool   `json:"allowCrossProject,omitempty"`
+}
+
+type MCPProjectRule struct {
+	Mode         MCPMode  `json:"mode,omitempty"`
+	Operations   []string `json:"operations,omitempty"`
+	Environments []string `json:"environments,omitempty"`
+	PathPrefixes []string `json:"pathPrefixes,omitempty"`
+}
+
+type MCPMode string
+
+const (
+	MCPModeIdentity MCPMode = "identity"
+	MCPModeDeny     MCPMode = "deny"
+	MCPModeReadOnly MCPMode = "read-only"
+	MCPModeLimited  MCPMode = "limited"
+)
+
+var mcpOperations = map[string]bool{
+	"project.list": true, "project.get": true, "project.rename": true, "project.update": true, "project.delete": true,
+	"environment.list": true, "environment.create": true, "environment.update": true, "environment.delete": true,
+	"folder.list": true, "folder.create": true, "folder.update": true, "folder.delete": true,
+	"secret.list": true, "secret.get": true, "secret.create": true, "secret.update": true, "secret.delete": true,
+	"role.list": true, "role.create": true, "role.update": true, "role.delete": true,
+	"membership.list": true, "membership.add": true, "membership.update": true, "membership.delete": true,
+}
+
+func (m MCPMode) Valid() bool {
+	return m == "" || m == MCPModeIdentity || m == MCPModeDeny || m == MCPModeReadOnly || m == MCPModeLimited
+}
+
+func (p MCPAccessPolicy) Validate() error {
+	if len(p.Contexts) == 0 {
+		return errors.New("invalid_mcp_context_policy")
+	}
+	for key, ctx := range p.Contexts {
+		if !identifier.MatchString(key) || !identifier.MatchString(ctx.TargetProjectID) {
+			return errors.New("invalid_mcp_context_policy")
+		}
+	}
+	for id, rule := range p.Projects {
+		if !identifier.MatchString(id) || !rule.Mode.Valid() {
+			return errors.New("invalid_mcp_project_policy")
+		}
+		for _, op := range rule.Operations {
+			if !mcpOperations[op] {
+				return errors.New("invalid_mcp_project_policy")
+			}
+		}
+		if rule.Mode == MCPModeDeny && (len(rule.Operations) != 0 || len(rule.Environments) != 0 || len(rule.PathPrefixes) != 0) {
+			return errors.New("invalid_mcp_project_policy")
+		}
+		if rule.Mode != MCPModeLimited && rule.Mode != MCPModeDeny && (len(rule.Operations) != 0 || len(rule.Environments) != 0 || len(rule.PathPrefixes) != 0) {
+			return errors.New("invalid_mcp_project_policy")
+		}
+		if rule.Mode == MCPModeLimited && len(rule.Operations) == 0 {
+			return errors.New("invalid_mcp_project_policy")
+		}
+		if rule.Mode == MCPModeLimited {
+			for _, op := range rule.Operations {
+				if op == "environment.list" || op == "environment.update" || op == "environment.delete" {
+					return errors.New("invalid_mcp_project_policy")
+				}
+				if op == "environment.create" && len(rule.Environments) == 0 {
+					return errors.New("invalid_mcp_project_policy")
+				}
+			}
+		}
+		for _, env := range rule.Environments {
+			if !identifier.MatchString(env) {
+				return errors.New("invalid_mcp_project_policy")
+			}
+		}
+		for _, prefix := range rule.PathPrefixes {
+			if !strings.HasPrefix(prefix, "/") || strings.Contains(prefix, "//") || (prefix != "/" && strings.HasSuffix(prefix, "/")) {
+				return errors.New("invalid_mcp_project_policy")
+			}
+			for _, part := range strings.Split(strings.TrimPrefix(prefix, "/"), "/") {
+				if part != "" && (!identifier.MatchString(part) || part == "." || part == "..") {
+					return errors.New("invalid_mcp_project_policy")
+				}
+			}
+		}
+		for _, op := range rule.Operations {
+			if strings.HasPrefix(op, "secret.") || strings.HasPrefix(op, "folder.") {
+				if len(rule.Environments) == 0 || len(rule.PathPrefixes) == 0 {
+					return errors.New("invalid_mcp_project_policy")
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (p Policy) Validate() error {
@@ -54,6 +160,11 @@ func (p Policy) Validate() error {
 			if !identifier.MatchString(id) {
 				return errors.New("invalid_project_policy")
 			}
+		}
+	}
+	if p.MCPAccess != nil {
+		if err := p.MCPAccess.Validate(); err != nil {
+			return err
 		}
 	}
 	return nil

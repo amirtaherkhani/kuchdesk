@@ -46,8 +46,12 @@ type MCPAccessPolicy struct {
 }
 
 type MCPContext struct {
-	TargetProjectID   string `json:"targetProjectId"`
-	AllowCrossProject bool   `json:"allowCrossProject,omitempty"`
+	TargetProjectID    string `json:"targetProjectId"`
+	AllowCrossProject  bool   `json:"allowCrossProject,omitempty"`
+	AllowProjectCreate bool   `json:"allowProjectCreate,omitempty"`
+	ProjectNamePrefix  string `json:"projectNamePrefix,omitempty"`
+	AllowIdentityAdmin bool   `json:"allowIdentityAdmin,omitempty"`
+	IdentityNamePrefix string `json:"identityNamePrefix,omitempty"`
 }
 
 type MCPProjectRule struct {
@@ -71,7 +75,8 @@ var mcpOperations = map[string]bool{
 	"environment.list": true, "environment.create": true, "environment.update": true, "environment.delete": true,
 	"folder.list": true, "folder.create": true, "folder.update": true, "folder.delete": true,
 	"secret.list": true, "secret.get": true, "secret.create": true, "secret.update": true, "secret.delete": true,
-	"role.list": true, "role.create": true, "role.update": true, "role.delete": true,
+	"secret.read_value": true,
+	"role.list":         true, "role.create": true, "role.update": true, "role.delete": true,
 	"membership.list": true, "membership.add": true, "membership.update": true, "membership.delete": true,
 }
 
@@ -85,6 +90,18 @@ func (p MCPAccessPolicy) Validate() error {
 	}
 	for key, ctx := range p.Contexts {
 		if !identifier.MatchString(key) || !identifier.MatchString(ctx.TargetProjectID) {
+			return errors.New("invalid_mcp_context_policy")
+		}
+		if ctx.AllowProjectCreate && (!ctx.AllowCrossProject || len(ctx.ProjectNamePrefix) < 4 || len(ctx.ProjectNamePrefix) > 32 || !identifier.MatchString(ctx.ProjectNamePrefix)) {
+			return errors.New("invalid_mcp_context_policy")
+		}
+		if !ctx.AllowProjectCreate && ctx.ProjectNamePrefix != "" {
+			return errors.New("invalid_mcp_context_policy")
+		}
+		if ctx.AllowIdentityAdmin && (len(ctx.IdentityNamePrefix) < 4 || len(ctx.IdentityNamePrefix) > 32 || !identifier.MatchString(ctx.IdentityNamePrefix)) {
+			return errors.New("invalid_mcp_context_policy")
+		}
+		if !ctx.AllowIdentityAdmin && ctx.IdentityNamePrefix != "" {
 			return errors.New("invalid_mcp_context_policy")
 		}
 	}

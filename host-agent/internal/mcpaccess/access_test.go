@@ -57,6 +57,58 @@ func accessPolicy() enrollment.Policy {
 	}
 }
 
+func TestProjectCreationRequiresExplicitDevelopmentPolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	p := accessPolicy()
+	writeMCPPolicy(t, path, p)
+	a, err := NewAuthorizer(path, "kubedesk", projectSet{"platform": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := infisical.Command{Operation: "project.create", Name: "dev-fixture", RequestID: "run-1"}
+	if _, _, err := a.Authorize(context.Background(), command); !errors.Is(err, ErrDenied) {
+		t.Fatal("creation was allowed without explicit policy")
+	}
+	ctx := p.MCPAccess.Contexts["kubedesk"]
+	ctx.AllowProjectCreate = true
+	ctx.ProjectNamePrefix = "dev-"
+	p.MCPAccess.Contexts["kubedesk"] = ctx
+	writeMCPPolicy(t, path, p)
+	if _, _, err := a.Authorize(context.Background(), command); err != nil {
+		t.Fatal("development creation was denied")
+	}
+	command.Name = "production"
+	if _, _, err := a.Authorize(context.Background(), command); !errors.Is(err, ErrDenied) {
+		t.Fatal("nondevelopment creation was allowed")
+	}
+}
+
+func TestDisposableIdentityAdministrationRequiresExplicitPolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	p := accessPolicy()
+	writeMCPPolicy(t, path, p)
+	a, err := NewAuthorizer(path, "kubedesk", projectSet{"platform": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := infisical.Command{Operation: "identity.create", Name: "codex-fixture"}
+	if _, _, err := a.Authorize(context.Background(), command); !errors.Is(err, ErrDenied) {
+		t.Fatal("identity creation was allowed without policy")
+	}
+	ctx := p.MCPAccess.Contexts["kubedesk"]
+	ctx.AllowIdentityAdmin, ctx.IdentityNamePrefix = true, "codex-"
+	p.MCPAccess.Contexts["kubedesk"] = ctx
+	writeMCPPolicy(t, path, p)
+	resolved, _, err := a.Authorize(context.Background(), command)
+	if err != nil || resolved.OrganizationID != "org" {
+		t.Fatal("identity authority did not bind the policy organization")
+	}
+	command.Name = "unrelated"
+	if _, _, err := a.Authorize(context.Background(), command); !errors.Is(err, ErrDenied) {
+		t.Fatal("unrelated identity creation was allowed")
+	}
+}
+
 func TestAuthorizerResolvesTrustedContextAndIntersectsIdentityAndHostPolicy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.json")
 	writeMCPPolicy(t, path, accessPolicy())

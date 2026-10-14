@@ -76,7 +76,17 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 		}
 	}
 	if command.Operation == "project.create" {
-		return command, nil, ErrDenied
+		if !clientContext.AllowProjectCreate || !strings.HasPrefix(command.Name, clientContext.ProjectNamePrefix) || !p.AllProjects {
+			return command, nil, ErrDenied
+		}
+		return command, allowed, nil
+	}
+	if command.Operation == "identity.create" || command.Operation == "identity.delete" {
+		if !clientContext.AllowIdentityAdmin || !strings.HasPrefix(command.Name, clientContext.IdentityNamePrefix) || (command.IdentityID != "" && (command.IdentityID == p.HostIdentityID || command.IdentityID == p.K8IdentityID)) {
+			return command, nil, ErrDenied
+		}
+		command.OrganizationID = p.OrganizationID
+		return command, allowed, nil
 	}
 	if command.Operation == "project.list" {
 		if len(allowed) == 0 {
@@ -90,7 +100,7 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 	if !clientContext.AllowCrossProject && command.ProjectID != clientContext.TargetProjectID {
 		return command, nil, ErrDenied
 	}
-	if !allowed[command.ProjectID] || !infisical.SupportsOperation(command.Operation) {
+	if !allowed[command.ProjectID] || (!infisical.SupportsOperation(command.Operation) && command.Operation != "secret.read_value") {
 		return command, nil, ErrDenied
 	}
 	environment := command.Environment
@@ -115,7 +125,7 @@ func ruleAllows(rule enrollment.MCPProjectRule, operation, environment, path str
 	case enrollment.MCPModeDeny:
 		return false
 	case enrollment.MCPModeReadOnly:
-		if !strings.HasSuffix(operation, ".list") && !strings.HasSuffix(operation, ".get") {
+		if !strings.HasSuffix(operation, ".list") && !strings.HasSuffix(operation, ".get") && operation != "secret.read_value" {
 			return false
 		}
 	case enrollment.MCPModeLimited:

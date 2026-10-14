@@ -1,47 +1,67 @@
-# Infisical project onboarding
+# Infisical development project onboarding
 
-At the 2026-10-10 local check, the host bridge permitted only the existing
-`home-lab-nb0-k` project. Its machine identity has a permanent Project Admin
-membership there and a separate organization Admin role. No cross-project
-automatic grant or dynamic bridge allowlist is enabled.
+The local Host enrollment controller discovers projects and prepares machine
+memberships. Its private policy and human session stay on this Mac. The Host
+identity performs MCP management; the Kubernetes identity receives only the
+configured read role. The HTTPS Host Bridge keeps its separate project
+allowlist and read-only API.
 
-Infisical's [machine identity guide](https://infisical.com/blog/introducing-machine-identities)
-distinguishes the organization role from adding an identity to a project.
+## Provision through MCP
 
-## Why an all-project reconciler is not ready
+An operator configures `-scope all -manage -allow-project-create` and a trusted
+dynamic context with `allowProjectCreate:true`, `allowCrossProject:true`, and a
+development-only `projectNamePrefix`. The Infisical machine identity must also
+have upstream organization authority. Policy cannot grant that authority.
 
-The installed Infisical v0.151.0 OpenAPI describes
-`GET /api/v2/organizations/{organizationId}/workspaces` as returning projects
-the caller belongs to. The live machine identity listed its one known project;
-that response cannot prove there are no other organization projects or discover
-future projects created elsewhere. The normal identity-membership write API is
-project-scoped. We have not verified that this identity can add itself to a
-project where it has no membership, and there is no safe basis for retrying a
-403 with a user token or widening the host bridge automatically.
+Call `infisical_manage` with `operation:project.create`, a name matching the
+prefix, a unique stable `requestId`, and confirmation
+`project.create:<requestId>`. Optional `slug`, `description`, `template`, and
+`shouldCreateDefaultEnvs` map to native Infisical fields. Omit `slug` for the
+native generated slug. Set `shouldCreateDefaultEnvs:false` to create only
+native `Development/dev`; no other project's environments are changed.
+Read the returned project ID, slug, and environments, then use that exact ID
+for subsequent operations. A private receipt binds retries to the same
+request and prevents duplicates. An uncertain outcome reports pending
+reconciliation instead of trying a second create.
 
-For a project created outside this host control plane, a project administrator
-must first add the existing machine identity with the intended project role
-using Infisical's project access controls. After that, verify the identity's
-membership and the project ID, then explicitly add that ID to the host bridge's
-allowlist and restart only the bridge process. Do not put the Universal Auth
-client secret in Kubernetes, Helm values, an agent prompt, or a second
-credential store to avoid this step.
+The controller's next bounded cycle discovers an authorized new project,
+preserves existing memberships, and adds the configured Host and read-only
+Kubernetes memberships when its human authority is valid. Check the actual
+memberships and ledger before claiming enrollment. A project created outside
+this control plane still needs upstream membership and Host policy review.
+A project ID missing from machine visibility is denied by MCP even if named
+in the MCP policy.
 
-Projects created through the host control plane may have different creator
-permissions. Verify the resulting machine-identity membership before allowing
-the new project through the bridge. Project creation is currently disabled in
-the live bridge, so this path has not been tested.
+## Development permissions and values
 
-An automatic all-project policy needs a supported, version-pinned Infisical
-organization-level discovery and grant mechanism, plus an explicit decision
-to expand access. Until both exist, keep the home-lab allowlist and fail closed
-for other project IDs.
+Use `role.*` and `membership.*` with exact project IDs. Disposable no-access
+identities can be created and deleted only through an explicitly enabled
+identity-admin context with a constrained name prefix and private ownership
+receipt. Preserve real identities and memberships. Verify effective upstream
+role enforcement with a disposable identity before relying on grants.
 
-## Current code path
+`secret.get` remains metadata-only. `infisical_read_secret_values` is the
+explicit value-bearing tool for one exact project/environment/path. It excludes
+imports, recursive folders, and reference expansion; a collection is sorted
+and paged in memory, up to 1000 keys. Returned values enter MCP response and
+conversation context. Applications and tests still obtain their own ENV
+through existing Infisical CLI, OIDC, or Operator routes; an AI-triggered test
+does not replace direct application secret delivery.
 
-The existing project's display name is now **Kubedesk Platform**, with its UUID
-and `home-lab-nb0-k` slug preserved. The boundary above describes the original live
-bridge. An opt-in [hybrid controller](infisical-hybrid-control.md) now provides
-version-pinned human enrollment, machine memberships, runtime policy and a
-read-only K8 bridge. It is not activated by this code change. Its explicit live
-setup gates replace neither existing grants nor the need for human re-login.
+`infisical_group_secret_writes` first reports a value-free plan. Apply uses
+explicit create/update/delete actions and a scope confirmation. Update/delete
+require the version observed in the plan. Mac-local MCP sessions serialize
+per scope, but Infisical v0.151.0 has no atomic write precondition against an
+external actor. Group application is sequential; after a failure, inspect
+per-key status and reread metadata before retrying. No omitted key is deleted.
+
+## Deploy targets
+
+Deployment profiles are private, bounded JSON files selected by name from the
+configured absolute directory. Keep development namespace, release, source,
+image repository, and context explicit. Set `KUCHDESK_DEPLOY_ENABLED=true` only
+in the trusted MCP process environment. Plan and preflight precede start; start
+needs exact `release/namespace` confirmation. Jobs are process-local and
+cancel cooperatively, so cancellation is not an automatic rollback. Use unique
+fixture names and verify cleanup of owned workloads, images, and registry
+references without touching unrelated services or volumes.

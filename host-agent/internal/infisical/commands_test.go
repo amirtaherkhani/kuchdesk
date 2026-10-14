@@ -140,11 +140,21 @@ func TestAdministrativeCommandsUseVersionPinnedEndpoints(t *testing.T) {
 					commandLogin(w)
 					return
 				}
+				if tc.command.Operation == "project.create" && r.Method == http.MethodGet {
+					if r.URL.Path == "/api/v1/projects/new-project" {
+						_, _ = io.WriteString(w, `{"project":{"id":"new-project","name":"Test project","slug":"test-project","environments":[]}}`)
+						return
+					}
+					if r.URL.Path == "/api/v1/projects" {
+						_, _ = io.WriteString(w, `{"projects":[{"id":"new-project"}]}`)
+						return
+					}
+				}
 				if r.Method != tc.method || r.URL.Path != tc.path {
 					t.Errorf("got %s %s, want %s %s", r.Method, r.URL.Path, tc.method, tc.path)
 				}
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"project":{"id":"new-project","secretValue":"ignored"}}`)
+				_, _ = io.WriteString(w, `{"project":{"id":"new-project","name":"Test project","slug":"test-project","secretValue":"ignored"}}`)
 			})
 			service := CommandService{Client: client, AllowedProjects: map[string]bool{"project-1": true}, AllowProjectCreate: true}
 			target, _, err := validateCommand(tc.command)

@@ -67,6 +67,7 @@ type managementCapability struct {
 	Exposed                bool     `json:"exposed"`
 	PolicyMode             string   `json:"policyMode"`
 	ProjectCreationEnabled bool     `json:"projectCreationEnabled"`
+	IdentityAdminEnabled   bool     `json:"identityAdminEnabled"`
 	Operations             []string `json:"operations,omitempty"`
 	PermissionStatus       string   `json:"permissionStatus"`
 }
@@ -236,7 +237,8 @@ func newServerWithManagement(service *infisical.Service, runner *async.Runner, c
 				if commands.MCPPolicy != nil {
 					management.PolicyMode = "dynamic"
 				}
-				management.ProjectCreationEnabled = commands.AllowProjectCreate && commands.MCPPolicy == nil
+				management.ProjectCreationEnabled = commands.AllowProjectCreate
+				management.IdentityAdminEnabled = commands.AllowIdentityAdmin
 				management.Operations = infisical.SupportedOperations()
 			}
 			deployment := deploymentCapability{Enabled: cfg.Enabled, ProfileDirectoryConfigured: cfg.ProfileDir != "" && filepath.IsAbs(cfg.ProfileDir), ProfileAvailable: cfg.profileAvailable()}
@@ -251,10 +253,12 @@ func newServerWithManagement(service *infisical.Service, runner *async.Runner, c
 			return nil, capabilityOutput{Build: currentBuildIdentity(), BaseProject: profile, Configured: service.Configured(), Management: management, Deployment: deployment, TestCoverage: "not_asserted_by_discovery", Capabilities: []capability{
 				{Name: "list_secret_names", Status: "implemented; permission checked per request"},
 				{Name: "async_name_listing", Status: "implemented in bounded process memory"},
-				{Name: "secret_values", Status: "not returned by ordinary MCP tools"},
+				{Name: "secret_values", Status: manageStatus + "; explicit value-read tool only"},
+				{Name: "group_secret_writes", Status: manageStatus + "; sequential and partial application possible"},
 				{Name: "secret_writes", Status: manageStatus},
 				{Name: "secret_write_verification", Status: manageStatus},
 				{Name: "project_admin", Status: manageStatus},
+				{Name: "identity_admin", Status: manageStatus + "; additional startup and context policy required"},
 				{Name: "helm_deploy", Status: deployStatus},
 			}}, nil
 		})
@@ -448,7 +452,7 @@ func newServerWithScopeAndManagement(service *infisical.Service, runner *async.R
 	switch scope {
 	case "all":
 	case "doctor-repair", "doctor-readonly":
-		server.RemoveTools("infisical_capabilities", "infisical_list_secret_names", "infisical_start_list_secret_names", "infisical_job_status", "infisical_cancel_job", "infisical_manage", "infisical_verify_secret_write")
+		server.RemoveTools("infisical_capabilities", "infisical_list_secret_names", "infisical_start_list_secret_names", "infisical_job_status", "infisical_cancel_job", "infisical_manage", "infisical_verify_secret_write", "infisical_read_secret_values", "infisical_group_secret_writes")
 		if scope == "doctor-readonly" {
 			server.RemoveTools("kuchdesk_deploy_plan", "kuchdesk_deploy_preflight", "kuchdesk_deploy_start", "kuchdesk_job_status", "kuchdesk_cancel_job", "kuchdesk_doctor_validate_plan")
 			server.RemovePrompts("kuchdesk_doctor_repair")
@@ -461,6 +465,23 @@ func newServerWithScopeAndManagement(service *infisical.Service, runner *async.R
 }
 
 func registerInfisicalManagement(server *mcp.Server, commands infisical.CommandService) {
+	mcp.AddTool(server, &mcp.Tool{Name: "infisical_group_secret_writes", Description: "Plan or apply explicit create, update and delete changes at one project/environment/path. Apply requires secret.batch:projectId/environment/path confirmation; updates and deletes require expectedVersion. Returns names, versions and sanitized per-key status, never values. Partial application is possible."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input infisical.GroupWriteInput) (*mcp.CallToolResult, infisical.GroupWriteResult, error) {
+			result, err := commands.GroupWrite(ctx, input)
+			if err != nil {
+				result.Error = infisical.PublicError(err).Error()
+				return &mcp.CallToolResult{IsError: true}, result, nil
+			}
+			return nil, result, nil
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "infisical_read_secret_values", Description: "Return secret values at one explicitly authorized project, environment and exact path. Optional name selects one key. Values appear in this MCP tool response and conversation context. Imports, recursion and reference expansion are disabled.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input infisical.ValueInput) (*mcp.CallToolResult, infisical.ValueResult, error) {
+			result, err := commands.ReadValues(ctx, input)
+			if err != nil {
+				return nil, infisical.ValueResult{}, infisical.PublicError(err)
+			}
+			return nil, result, nil
+		})
 	mcp.AddTool(server, &mcp.Tool{Name: "infisical_verify_secret_write", Description: "Verify writes with a new random disposable secret in an explicit project/environment/path. Requires secret.verify_write:projectId/environment/path confirmation and create/get/update/delete permissions. Returns comparison and cleanup status only; cannot read or compare existing secrets."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input infisical.VerifyWriteInput) (*mcp.CallToolResult, infisical.VerifyWriteResult, error) {
 			result, err := commands.VerifySecretWrite(ctx, input)
@@ -472,7 +493,7 @@ func registerInfisicalManagement(server *mcp.Server, commands infisical.CommandS
 			}
 			return nil, result, nil
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "infisical_manage", Description: "Execute one explicitly scoped Infisical project, environment, folder, secret, role, or identity-membership command. Writes require operation:target confirmation. Responses never include secret values."},
+	mcp.AddTool(server, &mcp.Tool{Name: "infisical_manage", Description: "Execute one explicitly scoped Infisical project, environment, folder, secret, role, identity, or identity-membership command. Writes require operation:target confirmation. Responses never include secret values."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input infisical.Command) (*mcp.CallToolResult, infisical.CommandResult, error) {
 			result, err := commands.Execute(ctx, input)
 			if err != nil {
@@ -527,6 +548,7 @@ func main() {
 	manage := flag.Bool("manage", false, "expose scoped Infisical management commands in all scope")
 	projects := flag.String("project-ids", "", "comma-separated Infisical project ID allowlist for management")
 	allowProjectCreate := flag.Bool("allow-project-create", false, "allow organization-level project creation")
+	allowIdentityAdmin := flag.Bool("allow-identity-admin", false, "allow policy-scoped disposable identity creation and deletion")
 	projectPolicy := flag.String("project-policy", "", "path to the existing private Host enrollment policy (opt-in dynamic MCP policy)")
 	clientContext := flag.String("client-context", "", "trusted MCP client context key configured in the Host policy")
 	flag.Parse()
@@ -540,10 +562,6 @@ func main() {
 	}
 	if (*projectPolicy == "") != (*clientContext == "") || ((*projectPolicy != "" || *clientContext != "") && !*manage) {
 		fmt.Fprintln(os.Stderr, "-project-policy and -client-context must be used together with -manage")
-		os.Exit(2)
-	}
-	if *projectPolicy != "" && *allowProjectCreate {
-		fmt.Fprintln(os.Stderr, "-allow-project-create is unavailable with dynamic project policy")
 		os.Exit(2)
 	}
 	var service *infisical.Service
@@ -579,7 +597,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Infisical management requires a project allowlist")
 			os.Exit(2)
 		}
-		configured := infisical.CommandService{Client: client, AllowedProjects: allowed, AllowProjectCreate: *allowProjectCreate}
+		configured := infisical.CommandService{Client: client, AllowedProjects: allowed, AllowProjectCreate: *allowProjectCreate, AllowIdentityAdmin: *allowIdentityAdmin}
+		if *projectPolicy != "" {
+			configured.ProvisionDir = filepath.Join(filepath.Dir(*projectPolicy), "project-provisions")
+		}
 		if *projectPolicy != "" {
 			authorizer, err := mcpaccess.NewAuthorizer(*projectPolicy, *clientContext, client)
 			if err != nil {

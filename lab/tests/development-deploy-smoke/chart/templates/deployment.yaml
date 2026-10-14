@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: kuchdesk-development-smoke
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: smoke
+          image: {{ if .Values.image.digest }}{{ .Values.image.repository }}@{{ .Values.image.digest }}{{ else }}{{ .Values.image.repository }}:{{ .Values.image.tag }}{{ end }}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

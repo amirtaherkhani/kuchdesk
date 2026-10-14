@@ -1,0 +1,4 @@
+image:
+  repository: localhost:5001/kuchdesk-development-smoke
+  tag: git-000000000000
+  digest: ""

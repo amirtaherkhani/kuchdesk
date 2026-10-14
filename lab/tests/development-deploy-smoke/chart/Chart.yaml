@@ -1,0 +1,4 @@
+apiVersion: v2
+name: kuchdesk-development-smoke
+version: 0.1.0
+type: application

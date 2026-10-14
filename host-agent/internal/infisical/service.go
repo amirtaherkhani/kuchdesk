@@ -56,6 +56,10 @@ func PublicError(err error) error {
 		return errors.New("invalid_project_slug")
 	case errors.Is(err, ErrInvalidCommand):
 		return errors.New("invalid_command")
+	case errors.Is(err, ErrProvisionPending):
+		return errors.New("provision_outcome_pending_reconciliation")
+	case errors.Is(err, ErrVersionConflict):
+		return errors.New("version_conflict")
 	case errors.Is(err, ErrProjectDenied):
 		return errors.New("project_denied")
 	case errors.Is(err, ErrPolicyDenied):

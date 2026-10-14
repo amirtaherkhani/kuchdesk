@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +54,11 @@ func TestMCPPolicyDenialIsSanitizedBeforeTransport(t *testing.T) {
 	var state capabilityOutput
 	if err := json.Unmarshal(encoded, &state); err != nil || state.Management.PolicyMode != "dynamic" || state.Management.ProjectCreationEnabled {
 		t.Fatalf("dynamic capability state: %+v, %v", state, err)
+	}
+	verification, verifyErr := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_verify_secret_write", Arguments: map[string]any{"projectId": "forbidden-target", "environment": "dev", "path": "/", "confirm": "secret.verify_write:forbidden-target/dev/"}})
+	encodedVerification, _ := json.Marshal(verification)
+	if verifyErr != nil || !verification.IsError || !strings.Contains(string(encodedVerification), "policy_denied") || strings.Contains(string(encodedVerification), "forbidden-target") {
+		t.Fatal("verification policy denial not sanitized")
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_manage", Arguments: map[string]any{"operation": "secret.get", "projectId": "forbidden-target", "environment": "dev", "path": "/", "name": "PROBE"}})
 	if err != nil || !result.IsError {
@@ -216,7 +224,7 @@ func TestInfisicalManagementToolIsExplicitAndProjectScoped(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 14 {
+	if err != nil || len(tools.Tools) != 15 {
 		t.Fatalf("management tool catalog = %d, %v", len(tools.Tools), err)
 	}
 	capabilities, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_capabilities", Arguments: map[string]any{}})
@@ -547,5 +555,87 @@ func TestMCPAsyncNameListCompletes(t *testing.T) {
 			t.Fatalf("job did not finish: %+v", output)
 		case <-time.After(time.Millisecond):
 		}
+	}
+}
+
+func TestMCPSecretWriteVerifierReturnsOnlyStatusAndOwnedName(t *testing.T) {
+	for _, failCleanup := range []bool{false, true} {
+		t.Run(fmt.Sprint(failCleanup), func(t *testing.T) {
+			var mu sync.Mutex
+			value, name := "", ""
+			exists := false
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				if r.URL.Path == "/api/v1/auth/universal-auth/login" {
+					w.Write([]byte(`{"accessToken":"fixture-token","expiresIn":3600,"tokenType":"Bearer"}`))
+					return
+				}
+				switch r.Method {
+				case "POST", "PATCH":
+					var fields map[string]string
+					json.NewDecoder(r.Body).Decode(&fields)
+					value = fields["secretValue"]
+					name = strings.TrimPrefix(r.URL.Path, "/api/v4/secrets/")
+					exists = true
+					w.Write([]byte(`{}`))
+				case "DELETE":
+					if failCleanup {
+						w.WriteHeader(403)
+						return
+					}
+					exists = false
+					w.Write([]byte(`{}`))
+				case "GET":
+					if !exists {
+						w.WriteHeader(404)
+						return
+					}
+					json.NewEncoder(w).Encode(map[string]any{"secret": map[string]string{"secretKey": name, "secretValue": value}})
+				}
+			}))
+			defer backend.Close()
+			client, err := infisical.NewClient(backend.URL, "fixture-id", "fixture-credential", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			commands := infisical.CommandService{Client: client, AllowedProjects: map[string]bool{"fixture-project": true}}
+			ctx := context.Background()
+			runner := async.NewRunner(ctx, 1, 2)
+			defer runner.Close()
+			ct, st := mcp.NewInMemoryTransports()
+			ss, err := newServerWithScopeAndManagement(infisical.NewService(client), runner, deployConfig{}, fakeDoctorRunner{}, "all", &commands).Connect(ctx, st, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ss.Close()
+			session, err := mcp.NewClient(&mcp.Implementation{Name: "verify-test"}, nil).Connect(ctx, ct, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer session.Close()
+			args := map[string]any{"projectId": "fixture-project", "environment": "dev", "path": "/fixture", "confirm": "secret.verify_write:fixture-project/dev/fixture"}
+			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_verify_secret_write", Arguments: args})
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, _ := json.Marshal(result)
+			mu.Lock()
+			defer mu.Unlock()
+			if result.IsError != failCleanup || strings.Contains(string(encoded), value) || strings.Contains(string(encoded), "fixture-token") || strings.Contains(string(encoded), "fixture-credential") {
+				t.Fatal("verification transport result invalid or leaked values")
+			}
+			raw, _ := json.Marshal(result.StructuredContent)
+			var verified infisical.VerifyWriteResult
+			if json.Unmarshal(raw, &verified) != nil || !verified.CreatedMatch || !verified.UpdatedMatch || !verified.MismatchRejected || verified.CleanupConfirmed == failCleanup {
+				t.Fatal("verification status missing")
+			}
+			if failCleanup && verified.CleanupError != "permission_denied" {
+				t.Fatal("cleanup failure not actionable")
+			}
+			if !failCleanup && exists {
+				t.Fatal("fixture remained")
+			}
+		})
 	}
 }

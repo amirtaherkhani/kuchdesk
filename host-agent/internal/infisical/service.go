@@ -44,6 +44,10 @@ func (s *Service) ListSecretNames(ctx context.Context, scope Scope) ([]SecretNam
 func PublicError(err error) error {
 	var apiErr *APIError
 	switch {
+	case errors.Is(err, ErrVerificationMismatch):
+		return errors.New("fixture_value_mismatch")
+	case errors.Is(err, ErrFixtureCollision):
+		return errors.New("fixture_name_collision")
 	case errors.Is(err, ErrNotConfigured):
 		return errors.New("credentials_not_configured")
 	case errors.Is(err, ErrInvalidScope):

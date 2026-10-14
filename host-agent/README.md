@@ -127,12 +127,24 @@ availability. `permissionStatus=not_checked` and
 `testCoverage=not_asserted_by_discovery` are intentional: discovery does not
 query current Infisical permissions or prove a live operation. The operation
 list shares the registry used by dynamic policy. Secret writes require opted-in
-management. Ordinary MCP secret reads never return values. An opted-in live
-test fixture compares only its own generated secret internally, then removes
-it; neither expected nor observed values are returned or logged.
+management. Ordinary MCP secret reads never return values. With `-scope all -manage`, `infisical_verify_secret_write` creates its own
+random disposable secret in an explicitly supplied `projectId`, `environment`
+and `path`. Confirm with `secret.verify_write:<projectId>/<environment><path>`.
+It checks create/get/update/delete policy before writing, rechecks policy per
+request, and relies on upstream identity permissions, including value read.
+It compares generated markers after create and update, rejects a different
+marker, then deletes the fixture and verifies absence. It accepts no existing
+secret name or expected value; it is not a real-secret comparison oracle.
+Results contain only the generated fixture name, match/mismatch flags and
+sanitized operation/cleanup errors. A failed request also attempts cleanup
+with a separate bounded context; failed cleanup is reported with the exact
+fixture name for an operator. Process termination cannot guarantee cleanup.
+The verifier has a 45-second operation limit and up to 25 seconds for cleanup.
+Neither values nor their hashes are returned or logged. Doctor scopes omit it;
+Host Bridge and Kubernetes Agent expose no verifier endpoint.
 
 Release builds stamp the MCP handshake version using
-`-ldflags '-X main.releaseVersion=0.11.1'`. Capability `build` metadata reports
+`-ldflags '-X main.releaseVersion=0.12.0'`. Capability `build` metadata reports
 that version, the Go build's VCS source revision, and its modified-source flag.
 An unstamped development build advertises `dev`. Installing a binary does not
 replace the executable already held by an open MCP connection; reconnect it

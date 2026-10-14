@@ -15,7 +15,7 @@ func TestAllManagementOperationsUseScopedEndpoints(t *testing.T) {
 	}{
 		{"project.list", "GET", "/api/v1/projects", `{"projects":[]}`},
 		{"project.get", "GET", "/api/v1/projects/fixture-project", `{"project":{"id":"fixture-project"}}`},
-		{"project.create", "POST", "/api/v1/projects", `{"project":{"id":"created"}}`},
+		{"project.create", "POST", "/api/v1/projects", `{"project":{"id":"created","name":"fixture-name","slug":"fixture-slug"}}`},
 		{"project.rename", "PATCH", "/api/v1/projects/fixture-project", `{}`},
 		{"project.update", "PATCH", "/api/v1/projects/fixture-project", `{}`},
 		{"project.delete", "DELETE", "/api/v1/projects/fixture-project", `{}`},
@@ -41,7 +41,7 @@ func TestAllManagementOperationsUseScopedEndpoints(t *testing.T) {
 		{"membership.update", "PATCH", "/api/v1/projects/fixture-project/identity-memberships/fixture-identity", `{}`},
 		{"membership.delete", "DELETE", "/api/v1/projects/fixture-project/identity-memberships/fixture-identity", `{}`},
 	}
-	if len(tests) != len(SupportedOperations()) {
+	if len(tests)+2 != len(SupportedOperations()) { // organization identity operations have a separate contract
 		t.Fatal("operation registry and contract matrix differ")
 	}
 	for _, tc := range tests {
@@ -51,6 +51,16 @@ func TestAllManagementOperationsUseScopedEndpoints(t *testing.T) {
 				if r.URL.Path == "/api/v1/auth/universal-auth/login" {
 					commandLogin(w)
 					return
+				}
+				if tc.operation == "project.create" && r.Method == http.MethodGet {
+					if r.URL.Path == "/api/v1/projects/created" {
+						_, _ = io.WriteString(w, `{"project":{"id":"created","name":"fixture-name","slug":"fixture-slug","environments":[]}}`)
+						return
+					}
+					if r.URL.Path == "/api/v1/projects" {
+						_, _ = io.WriteString(w, `{"projects":[{"id":"created"}]}`)
+						return
+					}
 				}
 				calls++
 				if r.Method != tc.method || r.URL.Path != tc.path {

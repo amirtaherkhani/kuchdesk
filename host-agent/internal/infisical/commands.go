@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
+	"unicode"
 )
 
 var resourceSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -23,6 +25,7 @@ var supportedOperations = []string{
 	"secret.list", "secret.get", "secret.create", "secret.update", "secret.delete",
 	"role.list", "role.create", "role.update", "role.delete",
 	"membership.list", "membership.add", "membership.update", "membership.delete",
+	"identity.create", "identity.delete",
 }
 
 func SupportedOperations() []string { return append([]string(nil), supportedOperations...) }
@@ -47,19 +50,24 @@ type CommandAuthorizer interface {
 // only: results and logs must never serialize it. Names are always scoped to
 // an explicit project, environment, and path where the upstream API needs it.
 type Command struct {
-	Operation   string           `json:"operation"`
-	ProjectID   string           `json:"projectId,omitempty"`
-	ID          string           `json:"id,omitempty"`
-	IdentityID  string           `json:"identityId,omitempty"`
-	Environment string           `json:"environment,omitempty"`
-	Path        string           `json:"path,omitempty"`
-	Name        string           `json:"name,omitempty"`
-	Slug        string           `json:"slug,omitempty"`
-	Description string           `json:"description,omitempty"`
-	Value       *string          `json:"value,omitempty"`
-	Permissions []PermissionRule `json:"permissions,omitempty"`
-	Roles       []string         `json:"roles,omitempty"`
-	Confirm     string           `json:"confirm,omitempty"`
+	Operation         string           `json:"operation"`
+	ProjectID         string           `json:"projectId,omitempty"`
+	ID                string           `json:"id,omitempty"`
+	IdentityID        string           `json:"identityId,omitempty"`
+	OrganizationID    string           `json:"-"`
+	Environment       string           `json:"environment,omitempty"`
+	Path              string           `json:"path,omitempty"`
+	Name              string           `json:"name,omitempty"`
+	Slug              string           `json:"slug,omitempty"`
+	Description       string           `json:"description,omitempty"`
+	Type              string           `json:"type,omitempty"`
+	Template          string           `json:"template,omitempty"`
+	CreateDefaultEnvs *bool            `json:"shouldCreateDefaultEnvs,omitempty"`
+	RequestID         string           `json:"requestId,omitempty"`
+	Value             *string          `json:"value,omitempty"`
+	Permissions       []PermissionRule `json:"permissions,omitempty"`
+	Roles             []string         `json:"roles,omitempty"`
+	Confirm           string           `json:"confirm,omitempty"`
 }
 
 type PermissionRule struct {
@@ -69,19 +77,122 @@ type PermissionRule struct {
 
 // Resource is deliberately value-free, even for a GET secret response.
 type Resource struct {
-	ID          string   `json:"id,omitempty"`
-	Name        string   `json:"name,omitempty"`
-	Slug        string   `json:"slug,omitempty"`
-	Path        string   `json:"path,omitempty"`
-	Environment string   `json:"environment,omitempty"`
-	Roles       []string `json:"roles,omitempty"`
+	ID           string                `json:"id,omitempty"`
+	Name         string                `json:"name,omitempty"`
+	Slug         string                `json:"slug,omitempty"`
+	Description  string                `json:"description,omitempty"`
+	Type         string                `json:"type,omitempty"`
+	Environments []EnvironmentMetadata `json:"environments,omitempty"`
+	Path         string                `json:"path,omitempty"`
+	Environment  string                `json:"environment,omitempty"`
+	Roles        []string              `json:"roles,omitempty"`
+}
+
+type EnvironmentMetadata struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
 type CommandResult struct {
-	Operation string     `json:"operation"`
-	Target    string     `json:"target"`
-	Applied   bool       `json:"applied,omitempty"`
-	Items     []Resource `json:"items,omitempty"`
+	Operation        string     `json:"operation"`
+	Target           string     `json:"target"`
+	Applied          bool       `json:"applied,omitempty"`
+	Items            []Resource `json:"items,omitempty"`
+	EnrollmentStatus string     `json:"enrollmentStatus,omitempty"`
+}
+
+// ValueResult is deliberately separate from CommandResult. Callers must opt in
+// to placing secret values in their response context.
+type ValueResult struct {
+	ProjectID   string      `json:"projectId"`
+	Environment string      `json:"environment"`
+	Path        string      `json:"path"`
+	Items       []ValueItem `json:"items"`
+	NextOffset  *int        `json:"nextOffset,omitempty"`
+}
+
+type ValueItem struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type ValueInput struct {
+	ProjectID   string `json:"projectId" jsonschema:"required,exact Infisical project ID"`
+	Environment string `json:"environment" jsonschema:"required,actual environment slug"`
+	Path        string `json:"path" jsonschema:"required,absolute exact folder path"`
+	Name        string `json:"name,omitempty"`
+	Offset      int    `json:"offset,omitempty"`
+	Limit       int    `json:"limit,omitempty"`
+}
+
+// ReadValues reads only the exact path. Imports, recursion and interpolation
+// are disabled so an allowed path cannot pull values from another scope.
+func (s CommandService) ReadValues(ctx context.Context, input ValueInput) (ValueResult, error) {
+	if input.Offset < 0 || input.Limit < 0 || input.Limit > 500 || (input.Name != "" && (input.Offset != 0 || input.Limit != 0)) {
+		return ValueResult{}, ErrInvalidCommand
+	}
+	command := Command{Operation: "secret.read_value", ProjectID: input.ProjectID, Environment: input.Environment, Path: input.Path, Name: input.Name}
+	s, command, _, _, err := s.authorizeCommand(ctx, command)
+	if err != nil {
+		return ValueResult{}, err
+	}
+	result := ValueResult{ProjectID: command.ProjectID, Environment: command.Environment, Path: command.Path, Items: []ValueItem{}}
+	query := url.Values{"projectId": {command.ProjectID}, "environment": {command.Environment}, "secretPath": {command.Path}, "viewSecretValue": {"true"}, "recursive": {"false"}, "include_imports": {"false"}, "expandSecretReferences": {"false"}}
+	endpoint := "/api/v4/secrets"
+	if command.Name != "" {
+		endpoint += "/" + command.Name
+	}
+	body, err := s.Client.get(ctx, endpoint, query)
+	if err != nil {
+		return ValueResult{}, err
+	}
+	var envelope struct {
+		Secret  json.RawMessage   `json:"secret"`
+		Secrets []json.RawMessage `json:"secrets"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return ValueResult{}, ErrInvalidResponse
+	}
+	entries := envelope.Secrets
+	if command.Name != "" {
+		entries = []json.RawMessage{envelope.Secret}
+	}
+	if len(entries) > 1000 || (command.Name != "" && len(envelope.Secret) == 0) || (command.Name == "" && envelope.Secrets == nil) {
+		return ValueResult{}, ErrInvalidResponse
+	}
+	seen := make(map[string]bool, len(entries))
+	for _, raw := range entries {
+		var item struct {
+			Name   string  `json:"secretKey"`
+			Value  *string `json:"secretValue"`
+			Path   string  `json:"secretPath"`
+			Hidden bool    `json:"secretValueHidden"`
+		}
+		if json.Unmarshal(raw, &item) != nil || !resourceSegment.MatchString(item.Name) || item.Value == nil || item.Hidden || (command.Name != "" && item.Name != command.Name) || (item.Path != "" && item.Path != command.Path) || seen[item.Name] {
+			return ValueResult{}, ErrInvalidResponse
+		}
+		seen[item.Name] = true
+		result.Items = append(result.Items, ValueItem{Name: item.Name, Value: *item.Value})
+	}
+	if command.Name == "" {
+		sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].Name < result.Items[j].Name })
+		limit := input.Limit
+		if limit == 0 {
+			limit = 100
+		}
+		if input.Offset > len(result.Items) {
+			return ValueResult{}, ErrInvalidCommand
+		}
+		end := input.Offset + limit
+		if end < len(result.Items) {
+			result.NextOffset = &end
+		} else {
+			end = len(result.Items)
+		}
+		result.Items = result.Items[input.Offset:end]
+	}
+	return result, nil
 }
 
 // CommandService is the policy boundary before the version-pinned Infisical
@@ -90,12 +201,17 @@ type CommandService struct {
 	Client             *Client
 	AllowedProjects    map[string]bool
 	AllowProjectCreate bool
+	AllowIdentityAdmin bool
+	ProvisionDir       string
 	ProjectPolicy      interface{ Projects() map[string]bool }
 	MCPPolicy          CommandAuthorizer
 	ReadOnly           bool
 }
 
 func (s CommandService) Execute(ctx context.Context, command Command) (CommandResult, error) {
+	if command.Operation == "secret.read_value" {
+		return CommandResult{}, ErrInvalidCommand
+	}
 	var target string
 	var write bool
 	var err error
@@ -111,7 +227,7 @@ func (s CommandService) Execute(ctx context.Context, command Command) (CommandRe
 	case "project.get", "environment.list":
 		body, err = s.Client.get(ctx, "/api/v1/projects/"+command.ProjectID, nil)
 	case "project.create":
-		body, err = s.Client.request(ctx, http.MethodPost, "/api/v1/projects", nil, map[string]any{"projectName": command.Name, "slug": command.Slug, "projectDescription": command.Description, "type": "secret-manager"})
+		return s.createProject(ctx, command, result)
 	case "project.rename":
 		body, err = s.Client.request(ctx, http.MethodPatch, "/api/v1/projects/"+command.ProjectID, nil, map[string]string{"name": command.Name})
 	case "project.update":
@@ -202,17 +318,16 @@ func (s CommandService) Execute(ctx context.Context, command Command) (CommandRe
 		case "membership.delete":
 			body, err = s.Client.request(ctx, http.MethodDelete, base, nil, nil)
 		}
+	case "identity.create":
+		return s.createIdentity(ctx, command, result)
+	case "identity.delete":
+		return s.deleteIdentity(ctx, command, result)
 	}
 	if err != nil {
 		return CommandResult{}, err
 	}
 	if write {
 		result.Applied = true
-		if command.Operation == "project.create" {
-			if created, decodeErr := readMetadata(body, "project.get"); decodeErr == nil {
-				result.Items = created
-			}
-		}
 		return result, nil
 	}
 	if command.Operation == "secret.list" {
@@ -263,9 +378,6 @@ func (s CommandService) authorizeCommand(ctx context.Context, command Command) (
 			}
 		}
 		s.AllowedProjects = allowed
-		if command.Operation == "project.create" {
-			return s, command, "", false, ErrProjectDenied
-		}
 	}
 	if s.ReadOnly && !ReadOperation(command.Operation) {
 		return s, command, "", false, ErrProjectDenied
@@ -279,6 +391,10 @@ func (s CommandService) authorizeCommand(ctx context.Context, command Command) (
 	}
 	if command.Operation == "project.create" {
 		if !s.AllowProjectCreate {
+			return s, command, "", false, ErrProjectDenied
+		}
+	} else if command.Operation == "identity.create" || command.Operation == "identity.delete" {
+		if !s.AllowIdentityAdmin || s.MCPPolicy == nil {
 			return s, command, "", false, ErrProjectDenied
 		}
 	} else if command.Operation == "project.list" {
@@ -299,15 +415,27 @@ func validateCommand(c Command) (target string, write bool, err error) {
 	if len(parts) != 2 {
 		return "", false, ErrInvalidCommand
 	}
-	write = parts[1] != "list" && parts[1] != "get"
-	if c.Operation != "project.create" && c.Operation != "project.list" && !resourceSegment.MatchString(c.ProjectID) {
+	write = parts[1] != "list" && parts[1] != "get" && c.Operation != "secret.read_value"
+	if c.Operation != "project.create" && c.Operation != "project.list" && c.Operation != "identity.create" && c.Operation != "identity.delete" && !resourceSegment.MatchString(c.ProjectID) {
 		return "", false, ErrInvalidCommand
 	}
 	if c.Operation == "project.create" {
-		if !resourceSegment.MatchString(c.Slug) || len(c.Slug) < 5 || len(c.Slug) > 36 || strings.TrimSpace(c.Name) == "" {
+		if (c.Slug != "" && (!resourceSegment.MatchString(c.Slug) || len(c.Slug) < 5 || len(c.Slug) > 36)) || !validProjectText(c.Name, 128, true) || !validProjectText(c.Description, 256, false) || (c.Type != "" && c.Type != "secret-manager") || (c.Template != "" && (!resourceSegment.MatchString(c.Template) || len(c.Template) > 64)) || (c.RequestID != "" && !resourceSegment.MatchString(c.RequestID)) {
 			return "", false, ErrInvalidCommand
 		}
+		if c.RequestID != "" {
+			return c.RequestID, true, nil
+		}
 		return c.Slug, true, nil
+	}
+	if c.Operation == "identity.create" || c.Operation == "identity.delete" {
+		if !resourceSegment.MatchString(c.Name) || (c.Operation == "identity.delete" && !resourceSegment.MatchString(c.IdentityID)) || !resourceSegment.MatchString(c.OrganizationID) {
+			return "", false, ErrInvalidCommand
+		}
+		if c.Operation == "identity.create" {
+			return c.Name, true, nil
+		}
+		return c.IdentityID, true, nil
 	}
 	target = c.ProjectID
 	switch parts[0] {
@@ -336,7 +464,7 @@ func validateCommand(c Command) (target string, write bool, err error) {
 			target += "/" + c.Slug
 		}
 	case "folder", "secret":
-		if parts[1] != "list" && parts[1] != "get" && parts[1] != "create" && parts[1] != "update" && parts[1] != "delete" {
+		if parts[1] != "list" && parts[1] != "get" && parts[1] != "create" && parts[1] != "update" && parts[1] != "delete" && !(parts[0] == "secret" && parts[1] == "read_value") {
 			return "", false, ErrInvalidCommand
 		}
 		if parts[0] == "folder" && parts[1] == "get" {
@@ -360,7 +488,7 @@ func validateCommand(c Command) (target string, write bool, err error) {
 			} else if parts[1] == "create" {
 				target += "/" + c.Name
 			}
-		} else if parts[1] != "list" {
+		} else if parts[1] != "list" && parts[1] != "read_value" {
 			if !resourceSegment.MatchString(c.Name) {
 				return "", false, ErrInvalidCommand
 			}
@@ -368,6 +496,9 @@ func validateCommand(c Command) (target string, write bool, err error) {
 			if (parts[1] == "create" || parts[1] == "update") && c.Value == nil {
 				return "", false, ErrInvalidCommand
 			}
+		}
+		if parts[0] == "secret" && parts[1] == "read_value" && c.Name != "" && !resourceSegment.MatchString(c.Name) {
+			return "", false, ErrInvalidCommand
 		}
 	case "role":
 		if parts[1] != "list" && parts[1] != "create" && parts[1] != "update" && parts[1] != "delete" {
@@ -410,6 +541,18 @@ func validateCommand(c Command) (target string, write bool, err error) {
 		return "", false, ErrInvalidCommand
 	}
 	return target, write, nil
+}
+
+func validProjectText(value string, max int, required bool) bool {
+	if len(value) > max || (required && strings.TrimSpace(value) == "") {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func validCommandPath(path string) bool {

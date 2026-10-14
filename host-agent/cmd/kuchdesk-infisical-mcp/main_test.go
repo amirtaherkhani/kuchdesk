@@ -224,7 +224,7 @@ func TestInfisicalManagementToolIsExplicitAndProjectScoped(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 15 {
+	if err != nil || len(tools.Tools) != 17 {
 		t.Fatalf("management tool catalog = %d, %v", len(tools.Tools), err)
 	}
 	capabilities, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_capabilities", Arguments: map[string]any{}})

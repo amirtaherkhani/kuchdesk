@@ -4,6 +4,36 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-14
+
+### Added
+
+- Provision development Infisical projects through the dynamic MCP policy with
+  native optional metadata, generated slugs, Development-only environment
+  selection, durable request IDs, and readback of actual project metadata.
+- Administer disposable no-access identities, project roles, and memberships
+  through scoped Host/MCP commands. Identity cleanup is restricted to private
+  ownership receipts.
+- Return explicitly requested secret values through a separate scoped MCP tool.
+  Collections use bounded, sorted in-memory pages and exclude imports,
+  recursive folders, and reference expansion.
+- Plan and apply grouped secret create/update/delete operations with version
+  checks, Mac-local cross-process serialization, and per-key status.
+- Add a stateless development smoke source and chart for bounded deployment
+  profiles.
+
+### Changed
+
+- Report value-read, grouped-write, identity-admin and project-creation gates
+  separately from live permission and test evidence in MCP capabilities.
+
+### Fixed
+
+- Allow a trusted development context to request project creation without
+  requiring the not-yet-created project in the identity membership listing.
+  Existing project commands still intersect Host policy with current upstream
+  identity visibility.
+
 ## [0.12.0] - 2026-10-14
 
 ### Added

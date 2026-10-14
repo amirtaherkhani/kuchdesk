@@ -68,7 +68,7 @@ credentials by inventing commands. Plan validation is not authorization;
 the existing deployment opt-in and exact confirmation still apply. Failed
 post-checks remain unresolved.
 
-## Infisical MCP: first implementation slice
+## Infisical MCP and development management
 
 `cmd/kuchdesk-infisical-mcp` is a separate, long-running stdio MCP server. It does not change the periodic DNS LaunchAgent or run as a network listener. It uses the official MCP Go SDK v1.6.0 and Infisical's documented REST API from the deployed v0.151.0 OpenAPI; the host-agent Go module now requires Go 1.25. The local client implements Universal Auth login, in-memory token renewal from `expiresIn`, restart re-login, one bounded retry of a read after HTTP 401, and a pause after a repeated 401. It does not assume a year-long access token.
 
@@ -118,7 +118,7 @@ from `not_found` without printing an API response body. The existing Grafana
 Operator Secret uses a separate identity and must not be copied into the host
 backend.
 
-The Infisical MCP tools are `infisical_capabilities`, `infisical_list_secret_names`, `infisical_start_list_secret_names`, `infisical_job_status`, and `infisical_cancel_job`. Name listing requires an explicit project ID, environment slug, and absolute secret path. It requests `viewSecretValue=false` and returns only names and paths, discarding any value fields from the API response. Discovery works without credentials; a secret-list call then returns `credentials_not_configured`.
+The Infisical MCP discovery and name-listing tools are `infisical_capabilities`, `infisical_list_secret_names`, `infisical_start_list_secret_names`, `infisical_job_status`, and `infisical_cancel_job`. Name listing requires an explicit project ID, environment slug, and absolute secret path. It requests `viewSecretValue=false` and returns only names and paths. Discovery works without credentials; a secret-list call then returns `credentials_not_configured`.
 
 `infisical_capabilities` separates implemented operations from this process's
 management-tool exposure, static or dynamic policy mode, project-creation
@@ -126,8 +126,27 @@ gate, credential configuration, deployment enablement, and valid local-profile
 availability. `permissionStatus=not_checked` and
 `testCoverage=not_asserted_by_discovery` are intentional: discovery does not
 query current Infisical permissions or prove a live operation. The operation
-list shares the registry used by dynamic policy. Secret writes require opted-in
-management. Ordinary MCP secret reads never return values. With `-scope all -manage`, `infisical_verify_secret_write` creates its own
+list shares the command registry used by dynamic policy. Secret writes require opted-in
+management. `secret.get` remains metadata-only. The separate
+`infisical_read_secret_values` tool intentionally returns values to the MCP
+caller and its conversation context. It requires an exact project ID,
+environment slug and path; an optional `name` selects one key. Collection reads
+sort by key and page in memory with `offset` and `limit` (default 100, maximum
+500; at most 1000 keys at one path). The upstream request disables recursion,
+imports and reference expansion. Duplicate names, unexpected paths, hidden
+values and malformed responses fail closed. No cross-folder or imported values
+are returned. Values and credentials must not be copied into logs or reports.
+
+`infisical_group_secret_writes` plans explicit create, update or delete actions
+without returning values. Apply requires
+`secret.batch:<projectId>/<environment><path>` confirmation; update and delete
+also require the version from a fresh plan. A private file lock serializes
+sessions on this Mac for one project/environment/path. Each key is applied
+sequentially and a failure can leave earlier keys changed. Inspect the returned
+per-key status, reread metadata, then retry only keys still needing work.
+Infisical's v0.151.0 single-key write schema has no atomic version precondition;
+an external writer can race after the version read. Absent keys are never
+deleted implicitly. With `-scope all -manage`, `infisical_verify_secret_write` creates its own
 random disposable secret in an explicitly supplied `projectId`, `environment`
 and `path`. Confirm with `secret.verify_write:<projectId>/<environment><path>`.
 It checks create/get/update/delete policy before writing, rechecks policy per
@@ -144,7 +163,7 @@ Neither values nor their hashes are returned or logged. Doctor scopes omit it;
 Host Bridge and Kubernetes Agent expose no verifier endpoint.
 
 Release builds stamp the MCP handshake version using
-`-ldflags '-X main.releaseVersion=0.12.0'`. Capability `build` metadata reports
+`-ldflags '-X main.releaseVersion=0.13.0'`. Capability `build` metadata reports
 that version, the Go build's VCS source revision, and its modified-source flag.
 An unstamped development build advertises `dev`. Installing a binary does not
 replace the executable already held by an open MCP connection; reconnect it
@@ -217,22 +236,39 @@ operation-specific `confirm` string and effective Infisical permission.
 
 Project IDs are intersected with the current Infisical machine-identity
 listing and `include`/`exclude`/`allProjects` Host policy on each command; a
-policy read or identity listing failure denies the command. This policy does
-not enroll identities, change upstream permissions, or grant access. The
-dynamic policy cannot be combined with `-allow-project-create` in this
-release, so project creation remains unavailable through this MCP registration.
-The supported route is project creation by an authorized administrator in
-Infisical, followed by explicit machine-identity membership and Host policy
-enrollment as described in [project onboarding](../docs/infisical-project-onboarding.md).
-The separate static-management `-allow-project-create` gate exists but is not
-enabled by the current dynamic registration.
+policy read or identity listing failure denies the command. This policy never
+grants upstream permissions. Development project provisioning requires both
+`-allow-project-create` and the trusted context's `allowProjectCreate:true`,
+`allowCrossProject:true`, and a `projectNamePrefix`. `project.create` requires a
+unique `requestId` and `project.create:<requestId>` confirmation. Name,
+optional slug, description, `secret-manager` type, template, and
+`shouldCreateDefaultEnvs` follow the deployed Infisical schema. Omitted slug is
+generated by Infisical. When `shouldCreateDefaultEnvs:false`, provisioning
+creates only native `Development/dev`. The response reads back the actual
+project ID, name, slug, and environments. A private request receipt prevents
+retry duplication; an uncertain create remains pending for operator
+reconciliation. The running enrollment controller discovers new organization
+projects and grants its configured Host/Kubernetes memberships on a later
+cycle, subject to human authority and policy. Verify actual memberships before
+treating a project as ready.
+
+Development identity fixtures require `-allow-identity-admin` plus context
+`allowIdentityAdmin:true` and `identityNamePrefix`. `identity.create` creates a
+no-access identity with a private ownership receipt; retries return the same
+identity. `identity.delete` accepts only its recorded ID/name and checks the
+organization and upstream object before deletion. Project roles and
+memberships use `role.*` and `membership.*`; effective permission is the
+intersection of Host policy, MCP context, and upstream identity authority.
+The Kubernetes bridge stays read-only.
 
 Example opt-in MCP policy section:
 
 ```json
 "mcpAccess": {
   "contexts": {
-    "kubedesk": { "targetProjectId": "stable-project-id", "allowCrossProject": false }
+    "kubedesk": { "targetProjectId": "stable-project-id", "allowCrossProject": true,
+      "allowProjectCreate": true, "projectNamePrefix": "dev-",
+      "allowIdentityAdmin": true, "identityNamePrefix": "codex-dev-" }
   },
   "projects": {
     "stable-project-id": { "mode": "limited", "operations": ["secret.list"], "environments": ["dev"], "pathPrefixes": ["/app"] }
@@ -494,6 +530,18 @@ has source tests and a prior temporary-profile MCP rollout of a stateless test
 workload. That test did not leave deployment enabled; recheck the active
 process's setting and profile directory before use. CoreDNS edits remain a
 separate operator decision.
+
+For persistent development use, configure `KUCHDESK_DEPLOY_ENABLED=true` and
+an absolute, private `KUCHDESK_DEPLOY_PROFILE_DIR` in the MCP registration.
+Keep only reviewed profiles there. The included
+`lab/tests/development-deploy-smoke` source/chart supports an isolated
+stateless smoke profile in a dedicated development namespace. Update the
+profile's image tag to the clean source commit before each new build; the
+namespace and release remain bounded by the operator-owned profile. The job
+ID identifies one process-local run. Use distinct releases for concurrent
+fixtures; serialization on the same target applies only within one MCP
+process. Cancellation signals context and does not roll back image pushes or
+Helm changes. Verify cleanup by exact resource ownership.
 
 ## Hybrid enrollment and base project metadata
 

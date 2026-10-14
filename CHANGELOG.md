@@ -4,6 +4,17 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-14
+
+### Added
+
+- Add `infisical_verify_secret_write` to opted-in MCP management. It verifies
+  create/update values and mismatch rejection using a new server-generated
+  disposable secret, then deletes it and reports confirmed absence. Explicit
+  scope, confirmation, current policy and upstream identity permissions are
+  required. Existing secret names, values and value hashes are never returned.
+  Failed cleanup returns the owned fixture name and a sanitized error.
+
 ## [0.11.1] - 2026-10-14
 
 ### Fixed

@@ -28,9 +28,26 @@ type capability struct {
 }
 
 type capabilityOutput struct {
-	BaseProject  platform.Profile `json:"baseProject"`
-	Configured   bool             `json:"configured"`
-	Capabilities []capability     `json:"capabilities"`
+	BaseProject  platform.Profile     `json:"baseProject"`
+	Configured   bool                 `json:"configured"`
+	Capabilities []capability         `json:"capabilities"`
+	Management   managementCapability `json:"management"`
+	Deployment   deploymentCapability `json:"deployment"`
+	TestCoverage string               `json:"testCoverage"`
+}
+
+type managementCapability struct {
+	Exposed                bool     `json:"exposed"`
+	PolicyMode             string   `json:"policyMode"`
+	ProjectCreationEnabled bool     `json:"projectCreationEnabled"`
+	Operations             []string `json:"operations,omitempty"`
+	PermissionStatus       string   `json:"permissionStatus"`
+}
+
+type deploymentCapability struct {
+	Enabled                    bool `json:"enabled"`
+	ProfileDirectoryConfigured bool `json:"profileDirectoryConfigured"`
+	ProfileAvailable           bool `json:"profileAvailable"`
 }
 
 type listInput struct {
@@ -152,11 +169,33 @@ func (cfg deployConfig) load(profile string) (deploy.Spec, error) {
 	return deploy.LoadSpec(file)
 }
 
+func (cfg deployConfig) profileAvailable() bool {
+	if cfg.ProfileDir == "" || !filepath.IsAbs(cfg.ProfileDir) {
+		return false
+	}
+	entries, err := os.ReadDir(cfg.ProfileDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if profileNamePattern.MatchString(entry.Name()) {
+			if _, err := cfg.load(entry.Name()); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func newServerWithDeploy(service *infisical.Service, runner *async.Runner, cfg deployConfig) *mcp.Server {
 	return newServerWithServices(service, runner, cfg, doctor.Service{})
 }
 
 func newServerWithServices(service *infisical.Service, runner *async.Runner, cfg deployConfig, diagnostics doctorRunner) *mcp.Server {
+	return newServerWithManagement(service, runner, cfg, diagnostics, nil)
+}
+
+func newServerWithManagement(service *infisical.Service, runner *async.Runner, cfg deployConfig, diagnostics doctorRunner, commands *infisical.CommandService) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "kuchdesk-infisical", Version: "0.1.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "infisical_capabilities", Description: "Show implemented Infisical tools and local credential configuration without accessing secrets.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(context.Context, *mcp.CallToolRequest, capabilityInput) (*mcp.CallToolResult, capabilityOutput, error) {
@@ -164,13 +203,31 @@ func newServerWithServices(service *infisical.Service, runner *async.Runner, cfg
 			if err != nil {
 				return nil, capabilityOutput{}, err
 			}
-			return nil, capabilityOutput{BaseProject: profile, Configured: service.Configured(), Capabilities: []capability{
-				{Name: "list_secret_names", Status: "implemented; live permissions unverified"},
-				{Name: "async_name_listing", Status: "implemented in memory; bounded to four concurrent operations and 64 records"},
-				{Name: "secret_values", Status: "not exposed to MCP"},
-				{Name: "secret_writes", Status: "planned; not implemented"},
-				{Name: "project_admin", Status: "local opt-in scoped management; forbidden through the K8 bridge"},
-				{Name: "helm_deploy", Status: "implemented as opt-in local profile workflow; live rollout unverified"},
+			management := managementCapability{Exposed: commands != nil, PolicyMode: "none", PermissionStatus: "not_checked"}
+			if commands != nil {
+				management.PolicyMode = "static_allowlist"
+				if commands.MCPPolicy != nil {
+					management.PolicyMode = "dynamic"
+				}
+				management.ProjectCreationEnabled = commands.AllowProjectCreate && commands.MCPPolicy == nil
+				management.Operations = infisical.SupportedOperations()
+			}
+			deployment := deploymentCapability{Enabled: cfg.Enabled, ProfileDirectoryConfigured: cfg.ProfileDir != "" && filepath.IsAbs(cfg.ProfileDir), ProfileAvailable: cfg.profileAvailable()}
+			manageStatus := "implemented; tool not exposed in this process"
+			if management.Exposed {
+				manageStatus = "implemented; tool exposed; permission checked per request"
+			}
+			deployStatus := "implemented; start disabled"
+			if deployment.Enabled {
+				deployStatus = "implemented; start enabled; profile and preflight required"
+			}
+			return nil, capabilityOutput{BaseProject: profile, Configured: service.Configured(), Management: management, Deployment: deployment, TestCoverage: "not_asserted_by_discovery", Capabilities: []capability{
+				{Name: "list_secret_names", Status: "implemented; permission checked per request"},
+				{Name: "async_name_listing", Status: "implemented in bounded process memory"},
+				{Name: "secret_values", Status: "not returned by ordinary MCP tools"},
+				{Name: "secret_writes", Status: manageStatus},
+				{Name: "project_admin", Status: manageStatus},
+				{Name: "helm_deploy", Status: deployStatus},
 			}}, nil
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "infisical_list_secret_names", Description: "List only secret names and paths in one explicit project, environment, and path. Values are never returned.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
@@ -346,17 +403,24 @@ func newServerWithServices(service *infisical.Service, runner *async.Runner, cfg
 	server.AddResource(&mcp.Resource{Name: "KuchDesk Doctor prompt template", URI: "kuchdesk://doctor/prompt/v2", MIMEType: "text/markdown"}, func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: "kuchdesk://doctor/prompt/v2", MIMEType: "text/markdown", Text: doctor.PromptTemplate()}}}, nil
 	})
+	if commands != nil {
+		registerInfisicalManagement(server, *commands)
+	}
 	return server
 }
 
 // Scope is applied before an MCP client connects. In Doctor modes the
 // Infisical tools are removed, so no credential backend is needed.
 func newServerWithScope(service *infisical.Service, runner *async.Runner, cfg deployConfig, diagnostics doctorRunner, scope string) *mcp.Server {
-	server := newServerWithServices(service, runner, cfg, diagnostics)
+	return newServerWithScopeAndManagement(service, runner, cfg, diagnostics, scope, nil)
+}
+
+func newServerWithScopeAndManagement(service *infisical.Service, runner *async.Runner, cfg deployConfig, diagnostics doctorRunner, scope string, commands *infisical.CommandService) *mcp.Server {
+	server := newServerWithManagement(service, runner, cfg, diagnostics, commands)
 	switch scope {
 	case "all":
 	case "doctor-repair", "doctor-readonly":
-		server.RemoveTools("infisical_capabilities", "infisical_list_secret_names", "infisical_start_list_secret_names", "infisical_job_status", "infisical_cancel_job")
+		server.RemoveTools("infisical_capabilities", "infisical_list_secret_names", "infisical_start_list_secret_names", "infisical_job_status", "infisical_cancel_job", "infisical_manage")
 		if scope == "doctor-readonly" {
 			server.RemoveTools("kuchdesk_deploy_plan", "kuchdesk_deploy_preflight", "kuchdesk_deploy_start", "kuchdesk_job_status", "kuchdesk_cancel_job", "kuchdesk_doctor_validate_plan")
 			server.RemovePrompts("kuchdesk_doctor_repair")
@@ -464,7 +528,7 @@ func main() {
 	runner := async.NewRunner(context.Background(), 4, 64)
 	defer runner.Close()
 	cfg := deployConfig{ProfileDir: os.Getenv("KUCHDESK_DEPLOY_PROFILE_DIR"), Enabled: os.Getenv("KUCHDESK_DEPLOY_ENABLED") == "true", Runner: deploy.ExecRunner{}}
-	server := newServerWithScope(service, runner, cfg, doctor.Service{}, *scope)
+	var commands *infisical.CommandService
 	if *manage {
 		allowed := make(map[string]bool)
 		for _, raw := range strings.Split(*projects, ",") {
@@ -476,17 +540,18 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Infisical management requires a project allowlist")
 			os.Exit(2)
 		}
-		commands := infisical.CommandService{Client: client, AllowedProjects: allowed, AllowProjectCreate: *allowProjectCreate}
+		configured := infisical.CommandService{Client: client, AllowedProjects: allowed, AllowProjectCreate: *allowProjectCreate}
 		if *projectPolicy != "" {
 			authorizer, err := mcpaccess.NewAuthorizer(*projectPolicy, *clientContext, client)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "invalid dynamic MCP project policy:", err)
 				os.Exit(2)
 			}
-			commands.MCPPolicy = authorizer
+			configured.MCPPolicy = authorizer
 		}
-		registerInfisicalManagement(server, commands)
+		commands = &configured
 	}
+	server := newServerWithScopeAndManagement(service, runner, cfg, doctor.Service{}, *scope, commands)
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "Infisical MCP server stopped")
 		os.Exit(1)

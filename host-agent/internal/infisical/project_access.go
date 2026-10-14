@@ -36,12 +36,12 @@ func (c *Client) ListProjectIDs(ctx context.Context) (map[string]bool, error) {
 		} `json:"projects"`
 	}
 	if err := json.Unmarshal(body, &listing); err != nil || listing.Projects == nil {
-		return nil, errors.New("Infisical returned an invalid project list")
+		return nil, ErrInvalidResponse
 	}
 	ids := make(map[string]bool, len(*listing.Projects))
 	for _, project := range *listing.Projects {
 		if !resourceSegment.MatchString(project.ID) || ids[project.ID] {
-			return nil, errors.New("Infisical returned an invalid project list")
+			return nil, ErrInvalidResponse
 		}
 		ids[project.ID] = true
 	}
@@ -65,7 +65,7 @@ func (c *Client) InspectProjectAccess(ctx context.Context, slug string) (Project
 		} `json:"projects"`
 	}
 	if err := json.Unmarshal(body, &listing); err != nil || listing.Projects == nil {
-		return ProjectAccess{}, errors.New("Infisical returned an invalid project list")
+		return ProjectAccess{}, ErrInvalidResponse
 	}
 	result := ProjectAccess{Slug: slug}
 	for _, project := range *listing.Projects {
@@ -94,7 +94,7 @@ func (c *Client) InspectProjectAccess(ctx context.Context, slug string) (Project
 		Slug string `json:"slug"`
 	}
 	if err := json.Unmarshal(body, &detail); err != nil || detail.ID == "" || detail.Slug != slug {
-		return ProjectAccess{}, errors.New("Infisical returned an invalid project detail")
+		return ProjectAccess{}, ErrInvalidResponse
 	}
 	result.DetailStatus = "allowed"
 	result.ProjectID = detail.ID

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,51 @@ import (
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/infisical"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type denyingPolicy struct{}
+
+func (denyingPolicy) Authorize(context.Context, infisical.Command) (infisical.Command, map[string]bool, error) {
+	return infisical.Command{}, nil, fmt.Errorf("%w: forbidden-target", infisical.ErrPolicyDenied)
+}
+
+func TestMCPPolicyDenialIsSanitizedBeforeTransport(t *testing.T) {
+	client, err := infisical.NewClient("https://infisical.example", "identity", "secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	runner := async.NewRunner(ctx, 1, 2)
+	defer runner.Close()
+	commands := infisical.CommandService{Client: client, MCPPolicy: denyingPolicy{}}
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	serverSession, err := newServerWithScopeAndManagement(infisical.NewService(client), runner, deployConfig{}, fakeDoctorRunner{}, "all", &commands).Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "policy-test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	capabilities, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_capabilities", Arguments: map[string]any{}})
+	if err != nil || capabilities.IsError {
+		t.Fatalf("capabilities: %+v, %v", capabilities, err)
+	}
+	encoded, _ := json.Marshal(capabilities.StructuredContent)
+	var state capabilityOutput
+	if err := json.Unmarshal(encoded, &state); err != nil || state.Management.PolicyMode != "dynamic" || state.Management.ProjectCreationEnabled {
+		t.Fatalf("dynamic capability state: %+v, %v", state, err)
+	}
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_manage", Arguments: map[string]any{"operation": "secret.get", "projectId": "forbidden-target", "environment": "dev", "path": "/", "name": "PROBE"}})
+	if err != nil || !result.IsError {
+		t.Fatalf("denial accepted: %+v, %v", result, err)
+	}
+	encoded, _ = json.Marshal(result)
+	if !strings.Contains(string(encoded), "policy_denied") || strings.Contains(string(encoded), "forbidden-target") {
+		t.Fatalf("denial leaked context: %s", encoded)
+	}
+}
 
 type mcpHealthyPreflight struct{}
 
@@ -152,8 +198,8 @@ func TestInfisicalManagementToolIsExplicitAndProjectScoped(t *testing.T) {
 	ctx := context.Background()
 	runner := async.NewRunner(ctx, 2, 4)
 	defer runner.Close()
-	server := newServerWithScope(infisical.NewService(client), runner, deployConfig{}, fakeDoctorRunner{}, "all")
-	registerInfisicalManagement(server, infisical.CommandService{Client: client, AllowedProjects: map[string]bool{"allowed": true}})
+	commands := infisical.CommandService{Client: client, AllowedProjects: map[string]bool{"allowed": true}}
+	server := newServerWithScopeAndManagement(infisical.NewService(client), runner, deployConfig{}, fakeDoctorRunner{}, "all", &commands)
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
@@ -169,11 +215,23 @@ func TestInfisicalManagementToolIsExplicitAndProjectScoped(t *testing.T) {
 	if err != nil || len(tools.Tools) != 14 {
 		t.Fatalf("management tool catalog = %d, %v", len(tools.Tools), err)
 	}
+	capabilities, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_capabilities", Arguments: map[string]any{}})
+	if err != nil || capabilities.IsError {
+		t.Fatalf("management capability read = %+v, %v", capabilities, err)
+	}
+	var state capabilityOutput
+	encoded, _ := json.Marshal(capabilities.StructuredContent)
+	if err := json.Unmarshal(encoded, &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Management.Exposed || state.Management.PolicyMode != "static_allowlist" || state.Management.ProjectCreationEnabled || len(state.Management.Operations) != len(infisical.SupportedOperations()) || state.Management.PermissionStatus != "not_checked" || state.TestCoverage != "not_asserted_by_discovery" || state.Deployment.Enabled {
+		t.Fatalf("capability state is stale: %+v", state)
+	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_manage", Arguments: map[string]any{"operation": "secret.get", "projectId": "denied", "environment": "dev", "path": "/", "name": "API_KEY"}})
 	if err != nil || !result.IsError {
 		t.Fatalf("project allowlist bypassed: %v %+v", err, result)
 	}
-	encoded, _ := json.Marshal(result)
+	encoded, _ = json.Marshal(result)
 	if !strings.Contains(string(encoded), "project_denied") || strings.Contains(string(encoded), "clientSecret") {
 		t.Fatalf("unredacted management error: %s", encoded)
 	}
@@ -312,6 +370,15 @@ func TestMCPDeployProfileBoundary(t *testing.T) {
 	encoded, _ := json.Marshal(plan.StructuredContent)
 	if !strings.Contains(string(encoded), "kuchdesk-agent") {
 		t.Fatalf("unexpected plan: %s", encoded)
+	}
+	capabilities, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_capabilities", Arguments: map[string]any{}})
+	if err != nil || capabilities.IsError {
+		t.Fatalf("profile capability read failed: %+v %v", capabilities, err)
+	}
+	encoded, _ = json.Marshal(capabilities.StructuredContent)
+	var state capabilityOutput
+	if err := json.Unmarshal(encoded, &state); err != nil || !state.Deployment.ProfileAvailable || !state.Deployment.ProfileDirectoryConfigured || state.Deployment.Enabled {
+		t.Fatalf("disabled profile state = %+v, %v", state.Deployment, err)
 	}
 	preflight, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "kuchdesk_deploy_preflight", Arguments: map[string]any{"profile": "agent.json"}})
 	if err != nil || preflight.IsError {

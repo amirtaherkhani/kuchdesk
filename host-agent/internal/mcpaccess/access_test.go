@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,6 +23,12 @@ type failedProjectSet struct{}
 
 func (failedProjectSet) ListProjectIDs(context.Context) (map[string]bool, error) {
 	return nil, errors.New("upstream unavailable")
+}
+
+type rejectedProjectSet struct{ status int }
+
+func (p rejectedProjectSet) ListProjectIDs(context.Context) (map[string]bool, error) {
+	return nil, &infisical.APIError{StatusCode: p.status}
 }
 
 func writeMCPPolicy(t *testing.T, path string, p enrollment.Policy) {
@@ -153,5 +162,82 @@ func TestAuthorizerFailsClosedOnPolicyAndIdentityReadFailures(t *testing.T) {
 	}
 	if _, _, err := a.Authorize(context.Background(), infisical.Command{Operation: "secret.list", Environment: "dev", Path: "/app"}); !errors.Is(err, ErrPolicyUnavailable) {
 		t.Fatalf("invalid policy error = %v", err)
+	}
+}
+
+func TestAuthorizerPreservesSanitizedUpstreamDenial(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	writeMCPPolicy(t, path, accessPolicy())
+	for _, tc := range []struct {
+		status int
+		want   string
+	}{
+		{http.StatusUnauthorized, "authentication_rejected"},
+		{http.StatusForbidden, "permission_denied"},
+		{http.StatusNotFound, "not_found"},
+	} {
+		a, err := NewAuthorizer(path, "kubedesk", rejectedProjectSet{status: tc.status})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = a.Authorize(context.Background(), infisical.Command{Operation: "project.list"})
+		if got := infisical.PublicError(err).Error(); got != tc.want {
+			t.Fatalf("HTTP %d mapped to %q, want %q", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestScopedCommandsDenyBeforeUpstreamSideEffects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	writeMCPPolicy(t, path, accessPolicy())
+	upstreamCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/universal-auth/login" {
+			_, _ = io.WriteString(w, `{"accessToken":"fixture-token","expiresIn":3600,"tokenType":"Bearer"}`)
+			return
+		}
+		upstreamCalls++
+		if r.Method != http.MethodGet {
+			t.Error("unexpected upstream write")
+		}
+		if r.URL.Path == "/api/v4/secrets" {
+			_, _ = io.WriteString(w, `{"secrets":[]}`)
+		} else {
+			_, _ = io.WriteString(w, `{"secret":{"secretKey":"FIXTURE","secretValue":"redacted"}}`)
+		}
+	}))
+	defer server.Close()
+	client, err := infisical.NewClient(server.URL, "fixture-id", "fixture-secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := NewAuthorizer(path, "kubedesk", projectSet{"platform": true, "readonly": true, "limited": true, "denied": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := infisical.CommandService{Client: client, MCPPolicy: authorizer}
+	allowed := []infisical.Command{
+		{Operation: "secret.get", ProjectID: "readonly", Environment: "dev", Path: "/app", Name: "FIXTURE"},
+		{Operation: "secret.list", ProjectID: "limited", Environment: "dev", Path: "/app"},
+	}
+	for _, command := range allowed {
+		if _, err := service.Execute(context.Background(), command); err != nil {
+			t.Fatalf("allowed %s: %v", command.Operation, err)
+		}
+	}
+	denied := []infisical.Command{
+		{Operation: "secret.update", ProjectID: "readonly", Environment: "dev", Path: "/app", Name: "FIXTURE"},
+		{Operation: "secret.list", ProjectID: "limited", Environment: "prod", Path: "/app"},
+		{Operation: "secret.list", ProjectID: "limited", Environment: "dev", Path: "/application"},
+		{Operation: "secret.get", ProjectID: "denied", Environment: "dev", Path: "/app", Name: "FIXTURE"},
+		{Operation: "project.create", Name: "Test", Slug: "test-project"},
+	}
+	for _, command := range denied {
+		if _, err := service.Execute(context.Background(), command); infisical.PublicError(err).Error() != "policy_denied" {
+			t.Fatalf("%s on %s mapped to %v", command.Operation, command.ProjectID, err)
+		}
+	}
+	if upstreamCalls != len(allowed) {
+		t.Fatalf("denied command caused upstream call: %d", upstreamCalls)
 	}
 }

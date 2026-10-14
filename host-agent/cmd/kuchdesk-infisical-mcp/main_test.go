@@ -111,6 +111,10 @@ func TestMCPDiscoveryAndRedactedErrors(t *testing.T) {
 	if !strings.Contains(string(encoded), `"configured":false`) {
 		t.Fatalf("unexpected capability output: %s", encoded)
 	}
+	var identity capabilityOutput
+	if err := json.Unmarshal(encoded, &identity); err != nil || identity.Build.Version != releaseVersion {
+		t.Fatalf("capability build identity = %+v, %v", identity.Build, err)
+	}
 	invalidDoctor, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "kuchdesk_doctor", Arguments: map[string]any{"domain": "infisical.local.dev", "kubeContext": "docker-desktop", "registryUrl": "https://example.com", "diskPath": "/tmp"}})
 	if err != nil || !invalidDoctor.IsError {
 		t.Fatalf("unsafe Doctor input accepted: %v %+v", err, invalidDoctor)

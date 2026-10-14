@@ -131,6 +131,13 @@ management. Ordinary MCP secret reads never return values. An opted-in live
 test fixture compares only its own generated secret internally, then removes
 it; neither expected nor observed values are returned or logged.
 
+Release builds stamp the MCP handshake version using
+`-ldflags '-X main.releaseVersion=0.11.1'`. Capability `build` metadata reports
+that version, the Go build's VCS source revision, and its modified-source flag.
+An unstamped development build advertises `dev`. Installing a binary does not
+replace the executable already held by an open MCP connection; reconnect it
+and verify this metadata after installation.
+
 Public errors distinguish `policy_denied`, `policy_unavailable`,
 `identity_projects_unavailable`, upstream `authentication_rejected` and
 `permission_denied`, `not_found`, `upstream_schema_error`, and

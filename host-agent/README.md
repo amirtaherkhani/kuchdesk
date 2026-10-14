@@ -252,6 +252,13 @@ projects and grants its configured Host/Kubernetes memberships on a later
 cycle, subject to human authority and policy. Verify actual memberships before
 treating a project as ready.
 
+When `mcpAccess.projects` is nonempty, it is an explicit MCP allowlist: every
+identity-visible project must have a rule, and unlisted projects are denied and
+omitted from `project.list`. Use `mode:"deny"` for known projects outside the
+development scope, then add a narrow `limited` rule for each approved
+development project. The trusted project-creation context remains separately
+prefix-limited; creating a project does not grant access to its resources.
+
 Development identity fixtures require `-allow-identity-admin` plus context
 `allowIdentityAdmin:true` and `identityNamePrefix`. `identity.create` creates a
 no-access identity with a private ownership receipt; retries return the same
@@ -275,6 +282,12 @@ Example opt-in MCP policy section:
   }
 }
 ```
+
+If an explicit project map is configured, include the context's target project
+and each approved development project. Add an explicit `deny` rule for any
+known project that must stay outside this MCP connection. A project-create
+prefix authorizes creation only; it does not make the new project usable until
+its returned ID receives an explicit project rule.
 
 An approved MCP registration uses `-scope all -manage -project-policy
 /absolute/path/to/private-policy.json -client-context CONTEXT` and sets

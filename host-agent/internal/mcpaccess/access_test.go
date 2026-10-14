@@ -49,11 +49,48 @@ func accessPolicy() enrollment.Policy {
 		MCPAccess: &enrollment.MCPAccessPolicy{
 			Contexts: map[string]enrollment.MCPContext{"kubedesk": {TargetProjectID: "platform", AllowCrossProject: true}},
 			Projects: map[string]enrollment.MCPProjectRule{
+				"platform": {Mode: enrollment.MCPModeIdentity},
+				"other":    {Mode: enrollment.MCPModeIdentity},
 				"denied":   {Mode: enrollment.MCPModeDeny},
 				"readonly": {Mode: enrollment.MCPModeReadOnly},
 				"limited":  {Mode: enrollment.MCPModeLimited, Operations: []string{"secret.list", "environment.create"}, Environments: []string{"dev"}, PathPrefixes: []string{"/app"}},
 			},
 		},
+	}
+}
+
+func TestExplicitProjectPolicyDeniesUnlistedVisibleProjects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	p := accessPolicy()
+	p.MCPAccess.Projects = map[string]enrollment.MCPProjectRule{
+		"platform": {Mode: enrollment.MCPModeIdentity},
+		"finance":  {Mode: enrollment.MCPModeDeny},
+	}
+	writeMCPPolicy(t, path, p)
+	a, err := NewAuthorizer(path, "kubedesk", projectSet{"platform": true, "finance": true, "new-visible-project": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, allowed, err := a.Authorize(context.Background(), infisical.Command{Operation: "project.list"})
+	if err != nil || !allowed["platform"] || allowed["finance"] || allowed["new-visible-project"] {
+		t.Fatalf("filtered projects = %#v, err=%v", allowed, err)
+	}
+	if _, _, err := a.Authorize(context.Background(), infisical.Command{Operation: "secret.list", ProjectID: "new-visible-project", Environment: "dev", Path: "/"}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("unlisted project was not denied: %v", err)
+	}
+}
+
+func TestEmptyProjectPolicyPreservesIdentityBasedScope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	p := accessPolicy()
+	p.MCPAccess.Projects = nil
+	writeMCPPolicy(t, path, p)
+	a, err := NewAuthorizer(path, "kubedesk", projectSet{"platform": true, "other": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.Authorize(context.Background(), infisical.Command{Operation: "secret.list", ProjectID: "other", Environment: "dev", Path: "/app"}); err != nil {
+		t.Fatalf("empty project policy changed legacy identity scope: %v", err)
 	}
 }
 

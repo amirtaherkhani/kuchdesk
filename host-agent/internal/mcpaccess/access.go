@@ -71,7 +71,11 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 	}
 	allowed := make(map[string]bool)
 	for id, listed := range visible {
-		if listed && p.Allows(id) && (clientContext.AllowCrossProject || id == clientContext.TargetProjectID) && ruleAllows(access.Projects[id], "project.list", "", "") {
+		rule, configured := access.Projects[id]
+		if len(access.Projects) > 0 && !configured {
+			continue
+		}
+		if listed && p.Allows(id) && (clientContext.AllowCrossProject || id == clientContext.TargetProjectID) && ruleAllows(rule, "project.list", "", "") {
 			allowed[id] = true
 		}
 	}
@@ -100,6 +104,10 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 	if !clientContext.AllowCrossProject && command.ProjectID != clientContext.TargetProjectID {
 		return command, nil, ErrDenied
 	}
+	rule, configured := access.Projects[command.ProjectID]
+	if len(access.Projects) > 0 && !configured {
+		return command, nil, ErrDenied
+	}
 	if !allowed[command.ProjectID] || (!infisical.SupportsOperation(command.Operation) && command.Operation != "secret.read_value") {
 		return command, nil, ErrDenied
 	}
@@ -107,7 +115,7 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 	if command.Operation == "environment.create" {
 		environment = command.Slug
 	}
-	if !ruleAllows(access.Projects[command.ProjectID], command.Operation, environment, command.Path) {
+	if !ruleAllows(rule, command.Operation, environment, command.Path) {
 		return command, nil, ErrDenied
 	}
 	return command, allowed, nil

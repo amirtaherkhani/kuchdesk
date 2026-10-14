@@ -4,6 +4,16 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Report Infisical management operations and deployment availability from the
+  current MCP process configuration. Capability discovery now separates
+  implemented support from exposure, permission, and live test evidence.
+- Return a sanitized `policy_denied` result for dynamic MCP policy denials
+  instead of `infisical_unavailable`. Distinguish policy, identity-list,
+  upstream authentication/permission, missing-resource, and response-schema
+  failures without returning targets or secret values.
+
 ## [0.11.0] - 2026-10-13
 
 ### Added

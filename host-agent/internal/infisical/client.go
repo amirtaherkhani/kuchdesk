@@ -114,15 +114,15 @@ func (c *Client) ListSecretNames(ctx context.Context, projectID, environment, se
 		} `json:"secrets"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil || response.Secrets == nil {
-		return nil, errors.New("Infisical returned an invalid secret list")
+		return nil, ErrInvalidResponse
 	}
 	if len(*response.Secrets) > 1000 {
-		return nil, errors.New("Infisical secret list exceeds the 1000-name limit")
+		return nil, ErrInvalidResponse
 	}
 	names := make([]SecretName, 0, len(*response.Secrets))
 	for _, item := range *response.Secrets {
 		if item.Key == "" {
-			return nil, errors.New("Infisical secret list contains an empty name")
+			return nil, ErrInvalidResponse
 		}
 		names = append(names, SecretName{Name: item.Key, Path: item.Path})
 	}
@@ -188,7 +188,7 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 			return nil, &APIError{StatusCode: response.StatusCode, RetryAfter: retryAfter(response.Header.Get("Retry-After"))}
 		}
 		if readErr != nil || len(body) > 1<<20 {
-			return nil, errors.New("Infisical response exceeds the 1 MiB limit")
+			return nil, ErrInvalidResponse
 		}
 		return body, nil
 	}
@@ -261,7 +261,7 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 	}
 	maxTTLSeconds := float64((time.Duration(1<<63-1) / time.Second))
 	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&login); err != nil || login.Token == "" || !(login.ExpiresIn > 0 && login.ExpiresIn <= maxTTLSeconds) || login.TokenType != "Bearer" {
-		return "", errors.New("Infisical returned an invalid login response")
+		return "", ErrInvalidResponse
 	}
 	c.token = login.Token
 	validFor := time.Duration(login.ExpiresIn * float64(time.Second))

@@ -4,6 +4,7 @@ package mcpaccess
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/enrollment"
@@ -11,10 +12,10 @@ import (
 )
 
 var (
-	ErrDenied              = errors.New("MCP project policy denied command")
-	ErrContextUnavailable  = errors.New("MCP client context is not configured")
-	ErrPolicyUnavailable   = errors.New("MCP project policy is unavailable")
-	ErrIdentityUnavailable = errors.New("Infisical identity project list is unavailable")
+	ErrDenied              = infisical.ErrPolicyDenied
+	ErrContextUnavailable  = infisical.ErrContextUnavailable
+	ErrPolicyUnavailable   = infisical.ErrPolicyUnavailable
+	ErrIdentityUnavailable = infisical.ErrIdentityUnavailable
 )
 
 type ProjectLister interface {
@@ -55,7 +56,17 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 		return command, nil, ErrContextUnavailable
 	}
 	visible, err := a.projects.ListProjectIDs(ctx)
-	if err != nil || visible == nil {
+	if err != nil {
+		var apiErr *infisical.APIError
+		if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden || apiErr.StatusCode == http.StatusNotFound) {
+			return command, nil, err
+		}
+		if errors.Is(err, infisical.ErrInvalidResponse) {
+			return command, nil, err
+		}
+		return command, nil, ErrIdentityUnavailable
+	}
+	if visible == nil {
 		return command, nil, ErrIdentityUnavailable
 	}
 	allowed := make(map[string]bool)
@@ -79,7 +90,7 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 	if !clientContext.AllowCrossProject && command.ProjectID != clientContext.TargetProjectID {
 		return command, nil, ErrDenied
 	}
-	if !allowed[command.ProjectID] || !supportedOperation(command.Operation) {
+	if !allowed[command.ProjectID] || !infisical.SupportsOperation(command.Operation) {
 		return command, nil, ErrDenied
 	}
 	environment := command.Environment
@@ -90,20 +101,6 @@ func (a *Authorizer) Authorize(ctx context.Context, command infisical.Command) (
 		return command, nil, ErrDenied
 	}
 	return command, allowed, nil
-}
-
-func supportedOperation(operation string) bool {
-	switch operation {
-	case "project.list", "project.get", "project.rename", "project.update", "project.delete",
-		"environment.list", "environment.create", "environment.update", "environment.delete",
-		"folder.list", "folder.create", "folder.update", "folder.delete",
-		"secret.list", "secret.get", "secret.create", "secret.update", "secret.delete",
-		"role.list", "role.create", "role.update", "role.delete",
-		"membership.list", "membership.add", "membership.update", "membership.delete":
-		return true
-	default:
-		return false
-	}
 }
 
 func ruleAllows(rule enrollment.MCPProjectRule, operation, environment, path string) bool {

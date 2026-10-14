@@ -16,6 +16,26 @@ var ErrInvalidCommand = errors.New("invalid Infisical command")
 var ErrProjectDenied = errors.New("Infisical project is not in the host allowlist")
 var ErrConfirmation = errors.New("exact Infisical command confirmation required")
 
+var supportedOperations = []string{
+	"project.list", "project.get", "project.create", "project.rename", "project.update", "project.delete",
+	"environment.list", "environment.create", "environment.update", "environment.delete",
+	"folder.list", "folder.create", "folder.update", "folder.delete",
+	"secret.list", "secret.get", "secret.create", "secret.update", "secret.delete",
+	"role.list", "role.create", "role.update", "role.delete",
+	"membership.list", "membership.add", "membership.update", "membership.delete",
+}
+
+func SupportedOperations() []string { return append([]string(nil), supportedOperations...) }
+
+func SupportsOperation(operation string) bool {
+	for _, supported := range supportedOperations {
+		if operation == supported {
+			return true
+		}
+	}
+	return false
+}
+
 // CommandAuthorizer resolves a trusted MCP context and applies dynamic policy.
 // It returns the command with its project target resolved and the current
 // identity/host-policy intersection for list filtering.
@@ -410,7 +430,7 @@ func validPermissions(rules []PermissionRule) bool {
 func readMetadata(body []byte, operation string) ([]Resource, error) {
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(body, &envelope) != nil {
-		return nil, errors.New("Infisical returned invalid metadata")
+		return nil, ErrInvalidResponse
 	}
 	key := strings.Split(operation, ".")[0]
 	if key == "environment" {
@@ -431,19 +451,19 @@ func readMetadata(body []byte, operation string) ([]Resource, error) {
 		}
 	}
 	if len(raw) == 0 {
-		return nil, errors.New("Infisical returned missing metadata")
+		return nil, ErrInvalidResponse
 	}
 	if operation == "environment.list" {
 		var project map[string]json.RawMessage
 		if json.Unmarshal(raw, &project) != nil {
-			return nil, errors.New("Infisical returned invalid project metadata")
+			return nil, ErrInvalidResponse
 		}
 		raw = project["environments"]
 	}
 	var entries []json.RawMessage
 	if strings.HasSuffix(operation, ".list") {
 		if json.Unmarshal(raw, &entries) != nil || len(entries) > 1000 {
-			return nil, errors.New("Infisical returned invalid metadata list")
+			return nil, ErrInvalidResponse
 		}
 	} else {
 		entries = []json.RawMessage{raw}
@@ -464,7 +484,7 @@ func readMetadata(body []byte, operation string) ([]Resource, error) {
 			} `json:"roles"`
 		}
 		if json.Unmarshal(entry, &item) != nil {
-			return nil, errors.New("Infisical returned invalid metadata item")
+			return nil, ErrInvalidResponse
 		}
 		if item.Name == "" {
 			item.Name = item.SecretKey

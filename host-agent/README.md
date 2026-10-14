@@ -120,6 +120,22 @@ backend.
 
 The Infisical MCP tools are `infisical_capabilities`, `infisical_list_secret_names`, `infisical_start_list_secret_names`, `infisical_job_status`, and `infisical_cancel_job`. Name listing requires an explicit project ID, environment slug, and absolute secret path. It requests `viewSecretValue=false` and returns only names and paths, discarding any value fields from the API response. Discovery works without credentials; a secret-list call then returns `credentials_not_configured`.
 
+`infisical_capabilities` separates implemented operations from this process's
+management-tool exposure, static or dynamic policy mode, project-creation
+gate, credential configuration, deployment enablement, and valid local-profile
+availability. `permissionStatus=not_checked` and
+`testCoverage=not_asserted_by_discovery` are intentional: discovery does not
+query current Infisical permissions or prove a live operation. The operation
+list shares the registry used by dynamic policy. Secret writes require opted-in
+management. Ordinary MCP secret reads never return values. An opted-in live
+test fixture compares only its own generated secret internally, then removes
+it; neither expected nor observed values are returned or logged.
+
+Public errors distinguish `policy_denied`, `policy_unavailable`,
+`identity_projects_unavailable`, upstream `authentication_rejected` and
+`permission_denied`, `not_found`, `upstream_schema_error`, and
+`infisical_unavailable` without exposing a target or upstream response body.
+
 The persistent MCP process executes up to four independent operations in parallel, retains at most 64 in-memory records, and gives each operation a 30-second deadline. Operations targeting the same nonempty resource key serialize in the runner; the current name-only reads use no key. Status distinguishes queued, running, succeeded, failed, canceled, and timed out. A cancellation request is cooperative through Go context; process exit discards job history and cancels in-flight work. This is lightweight agent execution, not a durable task service.
 
 The command-line client shares the same typed Infisical service and runs synchronously:
@@ -186,6 +202,11 @@ policy read or identity listing failure denies the command. This policy does
 not enroll identities, change upstream permissions, or grant access. The
 dynamic policy cannot be combined with `-allow-project-create` in this
 release, so project creation remains unavailable through this MCP registration.
+The supported route is project creation by an authorized administrator in
+Infisical, followed by explicit machine-identity membership and Host policy
+enrollment as described in [project onboarding](../docs/infisical-project-onboarding.md).
+The separate static-management `-allow-project-create` gate exists but is not
+enabled by the current dynamic registration.
 
 Example opt-in MCP policy section:
 
@@ -450,8 +471,9 @@ for the same context, namespace, and release. Profile names cannot escape the
 configured directory through path traversal or symlinks. Status and cancel
 are per-process only. The MCP process requires local Docker, `crane`, Helm,
 kubectl, and access to the selected Kubernetes context. This deployment path
-has source tests but has not performed a live MCP-driven rollout. The separate
-host CLI and manual Helm rollouts have succeeded. CoreDNS edits remain a
+has source tests and a prior temporary-profile MCP rollout of a stateless test
+workload. That test did not leave deployment enabled; recheck the active
+process's setting and profile directory before use. CoreDNS edits remain a
 separate operator decision.
 
 ## Hybrid enrollment and base project metadata

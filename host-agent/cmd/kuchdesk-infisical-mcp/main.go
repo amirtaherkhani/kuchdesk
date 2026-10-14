@@ -264,20 +264,25 @@ func newServerWithManagement(service *infisical.Service, runner *async.Runner, c
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "infisical_list_secret_names", Description: "List only secret names and paths in one explicit project, environment, and path. Values are never returned.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, listOutput, error) {
-			secrets, err := service.ListSecretNames(ctx, infisical.Scope{ProjectID: input.ProjectID, Environment: input.Environment, SecretPath: input.SecretPath})
+			secrets, err := listSecretNames(ctx, service, commands, infisical.Scope{ProjectID: input.ProjectID, Environment: input.Environment, SecretPath: input.SecretPath})
 			if err != nil {
 				return nil, listOutput{}, publicError(err)
 			}
 			return nil, listOutput{Secrets: secrets}, nil
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "infisical_start_list_secret_names", Description: "Start a bounded in-process name-only secret listing operation.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
-		func(_ context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, jobStarted, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, jobStarted, error) {
 			scope := infisical.Scope{ProjectID: input.ProjectID, Environment: input.Environment, SecretPath: input.SecretPath}
 			if err := infisical.ValidateScope(scope); err != nil {
 				return nil, jobStarted{}, publicError(err)
 			}
+			if commands != nil {
+				if err := commands.Authorize(ctx, infisical.Command{Operation: "secret.list", ProjectID: scope.ProjectID, Environment: scope.Environment, Path: scope.SecretPath}); err != nil {
+					return nil, jobStarted{}, publicError(err)
+				}
+			}
 			id, err := runner.Submit("", 30*time.Second, func(ctx context.Context) (any, error) {
-				secrets, err := service.ListSecretNames(ctx, scope)
+				secrets, err := listSecretNames(ctx, service, commands, scope)
 				if err != nil {
 					return nil, publicError(err)
 				}
@@ -616,6 +621,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Infisical MCP server stopped")
 		os.Exit(1)
 	}
+}
+
+func listSecretNames(ctx context.Context, service *infisical.Service, commands *infisical.CommandService, scope infisical.Scope) ([]infisical.SecretName, error) {
+	if commands == nil {
+		return service.ListSecretNames(ctx, scope)
+	}
+	result, err := commands.Execute(ctx, infisical.Command{Operation: "secret.list", ProjectID: scope.ProjectID, Environment: scope.Environment, Path: scope.SecretPath})
+	if err != nil {
+		return nil, err
+	}
+	secrets := make([]infisical.SecretName, 0, len(result.Items))
+	for _, item := range result.Items {
+		secrets = append(secrets, infisical.SecretName{Name: item.Name, Path: item.Path})
+	}
+	return secrets, nil
 }
 
 func hostClient(baseURL string, getenv func(string) string) (*infisical.Client, error) {

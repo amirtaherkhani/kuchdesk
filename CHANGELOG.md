@@ -4,6 +4,14 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-14
+
+### Fixed
+
+- Enforce the active dynamic MCP project, environment and path policy for
+  synchronous and queued secret-name listing. Queued requests are checked
+  again when they run; denied requests do not reach Infisical.
+
 ## [0.13.0] - 2026-10-14
 
 ### Added

@@ -154,8 +154,11 @@ adding another project.
 For an explicitly approved AI management client, the existing stdio MCP server
 can add `infisical_manage` with `-scope all -manage -project-ids PROJECT_ID`.
 This uses the same typed host command service, returns no secret values, and
-is not part of `doctor-repair`. The live MCP registration is `doctor-repair`
-only. Existing Grafana Operator sync remains independent.
+is not part of `doctor-repair`. On the Mac installation, the existing Codex
+`kuchdesk-doctor` registration now uses `-scope all -manage` and the dynamic
+project policy described below. The registration name is retained for existing
+clients; its tool set is no longer Doctor-only. Existing Grafana Operator sync
+remains independent.
 
 An optional dynamic policy can replace the explicit project ID list for a
 separately configured MCP client. It requires both `-project-policy` (the
@@ -168,12 +171,21 @@ identity-visible, Host-allowed projects. Optional per-project modes are
 secret/folder operations require exact environment and path-prefix lists;
 limited environment creation is restricted to listed slugs, while environment
 listing, renaming, and deletion are unavailable in limited mode.
+
+The Mac's trusted Codex context selects the Kubedesk Platform project when a
+management command omits `projectId`. To work on another project, supply its
+exact `projectId`; the context permits cross-project targeting only where the
+current Host policy and machine identity both allow it. Confirm the target
+using `project.list` and `project.get` before a project-specific command. An
+ambiguous target must be specified explicitly. Each write still needs the
+operation-specific `confirm` string and effective Infisical permission.
+
 Project IDs are intersected with the current Infisical machine-identity
 listing and `include`/`exclude`/`allProjects` Host policy on each command; a
 policy read or identity listing failure denies the command. This policy does
-not enroll identities, change upstream permissions, or grant access. Keep the
-existing `doctor-repair` MCP registration unchanged unless separately
-approved.
+not enroll identities, change upstream permissions, or grant access. The
+dynamic policy cannot be combined with `-allow-project-create` in this
+release, so project creation remains unavailable through this MCP registration.
 
 Example opt-in MCP policy section:
 
@@ -188,9 +200,12 @@ Example opt-in MCP policy section:
 }
 ```
 
-Start a separately approved MCP process with `-manage -project-policy
-/absolute/path/to/policy.json -client-context kubedesk`. Do not add these flags
-to the live MCP command until that exact activation is approved.
+An approved MCP registration uses `-scope all -manage -project-policy
+/absolute/path/to/private-policy.json -client-context CONTEXT` and sets
+`KUCHDESK_PROJECT_ROOT` to the trusted checkout for private credential lookup.
+Keep the actual policy path, identities, and credentials in local private
+configuration. Restart only this MCP connection after changing its startup
+arguments; policy changes are reloaded for each command.
 
 ## Local build and deployment workflow
 

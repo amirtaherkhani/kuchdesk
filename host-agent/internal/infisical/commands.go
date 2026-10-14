@@ -96,58 +96,12 @@ type CommandService struct {
 }
 
 func (s CommandService) Execute(ctx context.Context, command Command) (CommandResult, error) {
-	if s.Client == nil {
-		return CommandResult{}, ErrNotConfigured
-	}
-	if s.MCPPolicy != nil {
-		resolved, allowed, err := s.MCPPolicy.Authorize(ctx, command)
-		if err != nil {
-			return CommandResult{}, err
-		}
-		command = resolved
-		// Every configured/static boundary is an intersection. Dynamic policy
-		// cannot expand a narrower legacy allowlist or host-bridge view.
-		for id := range allowed {
-			if len(s.AllowedProjects) > 0 && !s.AllowedProjects[id] {
-				delete(allowed, id)
-			}
-		}
-		if s.ProjectPolicy != nil {
-			hostAllowed := s.ProjectPolicy.Projects()
-			for id := range allowed {
-				if !hostAllowed[id] {
-					delete(allowed, id)
-				}
-			}
-		}
-		s.AllowedProjects = allowed
-		if command.Operation == "project.create" {
-			return CommandResult{}, ErrProjectDenied
-		}
-	}
-	if s.ReadOnly && !ReadOperation(command.Operation) {
-		return CommandResult{}, ErrProjectDenied
-	}
-	if s.ProjectPolicy != nil && s.MCPPolicy == nil {
-		s.AllowedProjects = s.ProjectPolicy.Projects()
-	}
-	target, write, err := validateCommand(command)
+	var target string
+	var write bool
+	var err error
+	s, command, target, write, err = s.authorizeCommand(ctx, command)
 	if err != nil {
 		return CommandResult{}, err
-	}
-	if command.Operation == "project.create" {
-		if !s.AllowProjectCreate {
-			return CommandResult{}, ErrProjectDenied
-		}
-	} else if command.Operation == "project.list" {
-		if len(s.AllowedProjects) == 0 {
-			return CommandResult{}, ErrProjectDenied
-		}
-	} else if !s.AllowedProjects[command.ProjectID] {
-		return CommandResult{}, ErrProjectDenied
-	}
-	if write && command.Confirm != command.Operation+":"+target {
-		return CommandResult{}, ErrConfirmation
 	}
 	result := CommandResult{Operation: command.Operation, Target: target}
 	var body []byte
@@ -279,6 +233,65 @@ func (s CommandService) Execute(ctx context.Context, command Command) (CommandRe
 	}
 	result.Items = items
 	return result, nil
+}
+
+// authorizeCommand is shared by ordinary commands and the fixture verifier.
+// It resolves current policy on every request without performing a mutation.
+func (s CommandService) authorizeCommand(ctx context.Context, command Command) (authorized CommandService, resolved Command, target string, write bool, err error) {
+	if s.Client == nil {
+		return s, command, "", false, ErrNotConfigured
+	}
+	if s.MCPPolicy != nil {
+		resolved, allowed, err := s.MCPPolicy.Authorize(ctx, command)
+		if err != nil {
+			return s, command, "", false, err
+		}
+		command = resolved
+		// Every configured/static boundary is an intersection. Dynamic policy
+		// cannot expand a narrower legacy allowlist or host-bridge view.
+		for id := range allowed {
+			if len(s.AllowedProjects) > 0 && !s.AllowedProjects[id] {
+				delete(allowed, id)
+			}
+		}
+		if s.ProjectPolicy != nil {
+			hostAllowed := s.ProjectPolicy.Projects()
+			for id := range allowed {
+				if !hostAllowed[id] {
+					delete(allowed, id)
+				}
+			}
+		}
+		s.AllowedProjects = allowed
+		if command.Operation == "project.create" {
+			return s, command, "", false, ErrProjectDenied
+		}
+	}
+	if s.ReadOnly && !ReadOperation(command.Operation) {
+		return s, command, "", false, ErrProjectDenied
+	}
+	if s.ProjectPolicy != nil && s.MCPPolicy == nil {
+		s.AllowedProjects = s.ProjectPolicy.Projects()
+	}
+	target, write, err = validateCommand(command)
+	if err != nil {
+		return s, command, "", false, err
+	}
+	if command.Operation == "project.create" {
+		if !s.AllowProjectCreate {
+			return s, command, "", false, ErrProjectDenied
+		}
+	} else if command.Operation == "project.list" {
+		if len(s.AllowedProjects) == 0 {
+			return s, command, "", false, ErrProjectDenied
+		}
+	} else if !s.AllowedProjects[command.ProjectID] {
+		return s, command, "", false, ErrProjectDenied
+	}
+	if write && command.Confirm != command.Operation+":"+target {
+		return s, command, "", false, ErrConfirmation
+	}
+	return s, command, target, write, nil
 }
 
 func validateCommand(c Command) (target string, write bool, err error) {

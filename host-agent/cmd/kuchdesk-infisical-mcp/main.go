@@ -253,6 +253,7 @@ func newServerWithManagement(service *infisical.Service, runner *async.Runner, c
 				{Name: "async_name_listing", Status: "implemented in bounded process memory"},
 				{Name: "secret_values", Status: "not returned by ordinary MCP tools"},
 				{Name: "secret_writes", Status: manageStatus},
+				{Name: "secret_write_verification", Status: manageStatus},
 				{Name: "project_admin", Status: manageStatus},
 				{Name: "helm_deploy", Status: deployStatus},
 			}}, nil
@@ -447,7 +448,7 @@ func newServerWithScopeAndManagement(service *infisical.Service, runner *async.R
 	switch scope {
 	case "all":
 	case "doctor-repair", "doctor-readonly":
-		server.RemoveTools("infisical_capabilities", "infisical_list_secret_names", "infisical_start_list_secret_names", "infisical_job_status", "infisical_cancel_job", "infisical_manage")
+		server.RemoveTools("infisical_capabilities", "infisical_list_secret_names", "infisical_start_list_secret_names", "infisical_job_status", "infisical_cancel_job", "infisical_manage", "infisical_verify_secret_write")
 		if scope == "doctor-readonly" {
 			server.RemoveTools("kuchdesk_deploy_plan", "kuchdesk_deploy_preflight", "kuchdesk_deploy_start", "kuchdesk_job_status", "kuchdesk_cancel_job", "kuchdesk_doctor_validate_plan")
 			server.RemovePrompts("kuchdesk_doctor_repair")
@@ -460,6 +461,17 @@ func newServerWithScopeAndManagement(service *infisical.Service, runner *async.R
 }
 
 func registerInfisicalManagement(server *mcp.Server, commands infisical.CommandService) {
+	mcp.AddTool(server, &mcp.Tool{Name: "infisical_verify_secret_write", Description: "Verify writes with a new random disposable secret in an explicit project/environment/path. Requires secret.verify_write:projectId/environment/path confirmation and create/get/update/delete permissions. Returns comparison and cleanup status only; cannot read or compare existing secrets."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input infisical.VerifyWriteInput) (*mcp.CallToolResult, infisical.VerifyWriteResult, error) {
+			result, err := commands.VerifySecretWrite(ctx, input)
+			if err != nil && result.FixtureName == "" {
+				return nil, infisical.VerifyWriteResult{}, infisical.PublicError(err)
+			}
+			if err != nil || !result.CleanupConfirmed {
+				return &mcp.CallToolResult{IsError: true}, result, nil
+			}
+			return nil, result, nil
+		})
 	mcp.AddTool(server, &mcp.Tool{Name: "infisical_manage", Description: "Execute one explicitly scoped Infisical project, environment, folder, secret, role, or identity-membership command. Writes require operation:target confirmation. Responses never include secret values."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input infisical.Command) (*mcp.CallToolResult, infisical.CommandResult, error) {
 			result, err := commands.Execute(ctx, input)

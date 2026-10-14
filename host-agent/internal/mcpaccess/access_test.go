@@ -241,3 +241,28 @@ func TestScopedCommandsDenyBeforeUpstreamSideEffects(t *testing.T) {
 		t.Fatalf("denied command caused upstream call: %d", upstreamCalls)
 	}
 }
+
+func TestSecretVerifierUsesCurrentPolicyWithoutSideEffectsOnDenial(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	p := accessPolicy()
+	p.MCPAccess.Projects["limited"] = enrollment.MCPProjectRule{Mode: enrollment.MCPModeLimited, Operations: []string{"secret.create", "secret.get", "secret.update", "secret.delete"}, Environments: []string{"dev"}, PathPrefixes: []string{"/app"}}
+	writeMCPPolicy(t, path, p)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(500) }))
+	defer server.Close()
+	client, err := infisical.NewClient(server.URL, "fixture-id", "fixture-secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := NewAuthorizer(path, "kubedesk", projectSet{"readonly": true, "denied": true, "limited": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := infisical.CommandService{Client: client, MCPPolicy: authorizer}
+	for _, scope := range []struct{ id, env, path string }{{"readonly", "dev", "/app"}, {"denied", "dev", "/app"}, {"limited", "prod", "/app"}, {"limited", "dev", "/application"}} {
+		_, err := service.VerifySecretWrite(context.Background(), infisical.VerifyWriteInput{ProjectID: scope.id, Environment: scope.env, Path: scope.path, Confirm: "secret.verify_write:" + scope.id + "/" + scope.env + scope.path})
+		if !errors.Is(err, ErrDenied) || calls != 0 {
+			t.Fatal("fixture verifier bypassed current policy")
+		}
+	}
+}

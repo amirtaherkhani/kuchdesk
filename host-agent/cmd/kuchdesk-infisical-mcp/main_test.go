@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,8 +27,21 @@ func (denyingPolicy) Authorize(context.Context, infisical.Command) (infisical.Co
 	return infisical.Command{}, nil, fmt.Errorf("%w: forbidden-target", infisical.ErrPolicyDenied)
 }
 
+type allowingPolicy struct{ calls atomic.Int32 }
+
+func (p *allowingPolicy) Authorize(_ context.Context, command infisical.Command) (infisical.Command, map[string]bool, error) {
+	p.calls.Add(1)
+	return command, map[string]bool{command.ProjectID: true}, nil
+}
+
 func TestMCPPolicyDenialIsSanitizedBeforeTransport(t *testing.T) {
-	client, err := infisical.NewClient("https://infisical.example", "identity", "secret", nil)
+	var upstreamRequests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamRequests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+	client, err := infisical.NewClient(upstream.URL, "identity", "secret", upstream.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +81,94 @@ func TestMCPPolicyDenialIsSanitizedBeforeTransport(t *testing.T) {
 	encoded, _ = json.Marshal(result)
 	if !strings.Contains(string(encoded), "policy_denied") || strings.Contains(string(encoded), "forbidden-target") {
 		t.Fatalf("denial leaked context: %s", encoded)
+	}
+	for _, name := range []string{"infisical_list_secret_names", "infisical_start_list_secret_names"} {
+		listed, listErr := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{
+			"projectId": "forbidden-target", "environment": "dev", "secretPath": "/fixture",
+		}})
+		encodedList, _ := json.Marshal(listed)
+		if listErr != nil || !listed.IsError || !strings.Contains(string(encodedList), "policy_denied") || strings.Contains(string(encodedList), "forbidden-target") {
+			t.Fatalf("%s did not enforce and sanitize policy denial: %v %s", name, listErr, encodedList)
+		}
+	}
+	if got := upstreamRequests.Load(); got != 0 {
+		t.Fatalf("denied MCP commands reached upstream %d times", got)
+	}
+}
+
+func TestMCPNameListingUsesPolicyCheckedCommandService(t *testing.T) {
+	var upstreamLists atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/universal-auth/login" {
+			_, _ = fmt.Fprint(w, `{"accessToken":"token","expiresIn":3600,"tokenType":"Bearer"}`)
+			return
+		}
+		if r.URL.Path != "/api/v4/secrets" || r.URL.Query().Get("projectId") != "allowed-project" || r.URL.Query().Get("environment") != "dev" || r.URL.Query().Get("secretPath") != "/fixture" || r.URL.Query().Get("viewSecretValue") != "false" {
+			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL)
+		}
+		upstreamLists.Add(1)
+		_, _ = fmt.Fprint(w, `{"secrets":[{"secretKey":"FIXTURE","secretPath":"/fixture","secretValue":"must-not-return"}]}`)
+	}))
+	defer upstream.Close()
+	client, err := infisical.NewClient(upstream.URL, "identity", "bootstrap-secret", upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	runner := async.NewRunner(ctx, 1, 2)
+	defer runner.Close()
+	policy := &allowingPolicy{}
+	commands := infisical.CommandService{Client: client, MCPPolicy: policy}
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	serverSession, err := newServerWithScopeAndManagement(infisical.NewService(client), runner, deployConfig{}, fakeDoctorRunner{}, "all", &commands).Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "policy-test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	args := map[string]any{"projectId": "allowed-project", "environment": "dev", "secretPath": "/fixture"}
+	listed, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_list_secret_names", Arguments: args})
+	if err != nil || listed.IsError || !strings.Contains(fmt.Sprint(listed.StructuredContent), "FIXTURE") || strings.Contains(fmt.Sprint(listed.StructuredContent), "must-not-return") {
+		t.Fatalf("sync list did not return only authorized names: %v %+v", err, listed)
+	}
+	started, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_start_list_secret_names", Arguments: args})
+	if err != nil || started.IsError {
+		t.Fatalf("async start failed: %v %+v", err, started)
+	}
+	var start jobStarted
+	encoded, _ := json.Marshal(started.StructuredContent)
+	if err := json.Unmarshal(encoded, &start); err != nil || start.ID == "" {
+		t.Fatalf("invalid job ID: %v %s", err, encoded)
+	}
+	deadline := time.After(time.Second)
+	for {
+		status, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "infisical_job_status", Arguments: map[string]any{"id": start.ID}})
+		if err != nil || status.IsError {
+			t.Fatalf("status failed: %v %+v", err, status)
+		}
+		encoded, _ := json.Marshal(status.StructuredContent)
+		var output jobOutput
+		if err := json.Unmarshal(encoded, &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.State == async.Succeeded {
+			if len(output.Secrets) != 1 || output.Secrets[0].Name != "FIXTURE" {
+				t.Fatalf("unexpected authorized async result: %+v", output)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("authorized async list did not finish: %+v", output)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if got := upstreamLists.Load(); got != 2 || policy.calls.Load() != 3 {
+		t.Fatalf("policy/upstream calls = %d/%d, want 3/2", policy.calls.Load(), got)
 	}
 }
 

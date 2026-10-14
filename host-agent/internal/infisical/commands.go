@@ -350,6 +350,13 @@ func (s CommandService) Execute(ctx context.Context, command Command) (CommandRe
 	return result, nil
 }
 
+// Authorize checks a command without executing it. Async MCP operations use it
+// before accepting work and reauthorize again when the work runs.
+func (s CommandService) Authorize(ctx context.Context, command Command) error {
+	_, _, _, _, err := s.authorizeCommand(ctx, command)
+	return err
+}
+
 // authorizeCommand is shared by ordinary commands and the fixture verifier.
 // It resolves current policy on every request without performing a mutation.
 func (s CommandService) authorizeCommand(ctx context.Context, command Command) (authorized CommandService, resolved Command, target string, write bool, err error) {

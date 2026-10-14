@@ -33,6 +33,8 @@ All notable KuchDesk changes are documented in this file.
   requiring the not-yet-created project in the identity membership listing.
   Existing project commands still intersect Host policy with current upstream
   identity visibility.
+- Treat a nonempty dynamic MCP project map as an explicit allowlist, denying
+  and hiding identity-visible projects that have no configured rule.
 
 ## [0.12.0] - 2026-10-14
 

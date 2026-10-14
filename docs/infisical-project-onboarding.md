@@ -32,6 +32,16 @@ this control plane still needs upstream membership and Host policy review.
 A project ID missing from machine visibility is denied by MCP even if named
 in the MCP policy.
 
+For a development-only MCP connection, set a project-name prefix and an
+identity-name prefix in its trusted context, then use a nonempty `projects`
+map as an allowlist. Add the target Platform project with only the operations
+it needs, explicitly deny known production projects, and add a `limited` rule
+for each approved development project. Rules bind the allowed operations,
+environment slugs, and secret/folder path prefixes. A newly created project's
+ID must receive a rule before MCP can use it; the creation prefix does not
+grant follow-on access. Unlisted identity-visible projects are denied and
+omitted from `project.list` whenever the map is nonempty.
+
 ## Development permissions and values
 
 Use `role.*` and `membership.*` with exact project IDs. Disposable no-access

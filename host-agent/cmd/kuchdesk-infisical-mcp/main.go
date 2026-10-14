@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -22,12 +23,38 @@ import (
 
 type capabilityInput struct{}
 
+// The release build supplies this through -ldflags; development builds remain
+// explicitly distinguishable from published artifacts.
+var releaseVersion = "dev"
+
+type buildIdentity struct {
+	Version        string `json:"version"`
+	SourceCommit   string `json:"sourceCommit,omitempty"`
+	SourceModified bool   `json:"sourceModified"`
+}
+
+func currentBuildIdentity() buildIdentity {
+	identity := buildIdentity{Version: releaseVersion}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				identity.SourceCommit = setting.Value
+			case "vcs.modified":
+				identity.SourceModified = setting.Value == "true"
+			}
+		}
+	}
+	return identity
+}
+
 type capability struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
 }
 
 type capabilityOutput struct {
+	Build        buildIdentity        `json:"build"`
 	BaseProject  platform.Profile     `json:"baseProject"`
 	Configured   bool                 `json:"configured"`
 	Capabilities []capability         `json:"capabilities"`
@@ -196,7 +223,7 @@ func newServerWithServices(service *infisical.Service, runner *async.Runner, cfg
 }
 
 func newServerWithManagement(service *infisical.Service, runner *async.Runner, cfg deployConfig, diagnostics doctorRunner, commands *infisical.CommandService) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "kuchdesk-infisical", Version: "0.1.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "kuchdesk-infisical", Version: releaseVersion}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "infisical_capabilities", Description: "Show implemented Infisical tools and local credential configuration without accessing secrets.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(context.Context, *mcp.CallToolRequest, capabilityInput) (*mcp.CallToolResult, capabilityOutput, error) {
 			profile, err := platform.Load(os.Getenv)
@@ -221,7 +248,7 @@ func newServerWithManagement(service *infisical.Service, runner *async.Runner, c
 			if deployment.Enabled {
 				deployStatus = "implemented; start enabled; profile and preflight required"
 			}
-			return nil, capabilityOutput{BaseProject: profile, Configured: service.Configured(), Management: management, Deployment: deployment, TestCoverage: "not_asserted_by_discovery", Capabilities: []capability{
+			return nil, capabilityOutput{Build: currentBuildIdentity(), BaseProject: profile, Configured: service.Configured(), Management: management, Deployment: deployment, TestCoverage: "not_asserted_by_discovery", Capabilities: []capability{
 				{Name: "list_secret_names", Status: "implemented; permission checked per request"},
 				{Name: "async_name_listing", Status: "implemented in bounded process memory"},
 				{Name: "secret_values", Status: "not returned by ordinary MCP tools"},

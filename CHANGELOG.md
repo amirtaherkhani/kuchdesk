@@ -18,6 +18,11 @@ All notable KuchDesk changes are documented in this file.
 - Include Alloy publication values in the supported direct-YAML configuration
   catalog.
 
+### Fixed
+
+- Check the configured local ingress route instead of blocking deployment on
+  an unrelated VPN default route.
+
 ### Removed
 
 - Remove Infisical ENV Manager integrations, configuration, charts, and MCP

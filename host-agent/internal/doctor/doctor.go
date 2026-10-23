@@ -251,7 +251,7 @@ func (s Service) Run(ctx context.Context, config Config) (Report, error) {
 		run                            func(context.Context) Check
 	}
 	tasks := []task{
-		{"network", "host-network", "route", "macos", nil, func(ctx context.Context) Check { return s.network(ctx) }},
+		{"network", "host-network", "route", "macos", nil, func(ctx context.Context) Check { return s.network(ctx, config.Domain) }},
 		{"dns", "host-dns", "system-resolver", "macos", []string{"network"}, func(ctx context.Context) Check { return s.dns(ctx, config.Domain) }},
 		{"colima", "colima", "colima-status", config.KubeContext, nil, func(ctx context.Context) Check { return s.colima(ctx, config.KubeContext) }},
 		{"containerd", "containerd", "colima-nerdctl-info", config.KubeContext, []string{"colima"}, func(ctx context.Context) Check { return s.containerd(ctx, config.KubeContext) }},
@@ -333,28 +333,51 @@ func commandExitCode(err error) *int {
 	return nil
 }
 
-func (s Service) network(ctx context.Context) Check {
-	raw, err := s.Commands.Output(ctx, "route", "-n", "get", "default")
-	if err != nil {
-		check := failure("network", "Default route unavailable", "Check the Mac network route and VPN state")
-		check.ErrorClass = "command_failed"
-		check.ExitCode = commandExitCode(err)
+func (s Service) network(ctx context.Context, domain string) Check {
+	addresses, err := s.Resolver.LookupIPAddr(ctx, domain)
+	if err != nil || len(addresses) == 0 {
+		check := failure("network", "Configured ingress route unavailable", "Check the configured domain and its host route")
+		check.ErrorClass = "route_target_unavailable"
 		return check
 	}
-	excerpt, truncated := NormalizeExcerpt(raw)
-	for _, line := range strings.Split(string(raw), "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) == 2 && fields[0] == "interface:" && serviceName.MatchString(fields[1]) {
-			if strings.HasPrefix(fields[1], "utun") {
-				return Check{ID: "network", Status: "warn", Message: "VPN owns the default route", Evidence: map[string]any{"interface": fields[1]}, Recommendation: "Verify the physical interface used for local ingress and DNS", ErrorClass: "vpn_route", RawExcerpt: excerpt, Truncated: truncated}
+	interfaces := make(map[string]bool)
+	var excerpts []byte
+	for _, address := range addresses {
+		raw, routeErr := s.Commands.Output(ctx, "route", "-n", "get", address.IP.String())
+		if routeErr != nil {
+			check := failure("network", "Configured ingress route unavailable", "Check the host route to the configured domain")
+			check.ErrorClass = "command_failed"
+			check.ExitCode = commandExitCode(routeErr)
+			return check
+		}
+		excerpts = append(excerpts, raw...)
+		found := false
+		for _, line := range strings.Split(string(raw), "\n") {
+			fields := strings.Fields(strings.TrimSpace(line))
+			if len(fields) == 2 && fields[0] == "interface:" && serviceName.MatchString(fields[1]) {
+				interfaces[fields[1]] = true
+				found = true
+				break
 			}
-			check := ok("network", "Default route found", map[string]any{"interface": fields[1]})
-			check.RawExcerpt, check.Truncated = excerpt, truncated
+		}
+		if !found {
+			check := failure("network", "Configured ingress route interface unknown", "Inspect the host route to the configured domain")
+			check.ErrorClass, check.RawExcerpt, check.Truncated = "parse_error", "route interface unavailable", false
 			return check
 		}
 	}
-	check := failure("network", "Default route interface unknown", "Inspect the Mac route table")
-	check.ErrorClass, check.RawExcerpt, check.Truncated = "parse_error", excerpt, truncated
+	for iface := range interfaces {
+		if strings.HasPrefix(iface, "utun") {
+			excerpt, truncated := NormalizeExcerpt(excerpts)
+			evidence := map[string]any{"interface": iface}
+			if len(interfaces) > 1 {
+				evidence = map[string]any{"interfaces": interfaces}
+			}
+			return Check{ID: "network", Status: "warn", Message: "Configured ingress route uses a VPN interface", Evidence: evidence, Recommendation: "Verify the local ingress route and VPN split routing", ErrorClass: "vpn_route", RawExcerpt: excerpt, Truncated: truncated}
+		}
+	}
+	check := ok("network", "Configured ingress route found", map[string]any{"interfaces": interfaces})
+	check.RawExcerpt, check.Truncated = NormalizeExcerpt(excerpts)
 	return check
 }
 

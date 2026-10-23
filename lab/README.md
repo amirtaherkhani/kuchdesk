@@ -62,10 +62,52 @@ to migrate this installation's active TLS.
 ## Prerequisites
 
 - The `docker-desktop` Kubernetes context is selected and its node is Ready.
+- After the existing `platform-system/kuchdesk-local-registry` is Ready on the
+  Docker Desktop KIND node, run `python3 lab/scripts/local-registry-route.py`
+  from the repository root before deploying images named `localhost:5001/...`.
+  Repeat this step after Docker Desktop recreates the node. See
+  [Local registry route](#local-registry-route) below.
 - DNS resolves the generated `grafanaUrl` and `infisicalUrl` hosts to the ingress address. For a private CA, trust its root certificate on the client host.
 - `platform-secrets/infisical-secrets`, `platform-secrets/infisical-postgresql`, and `platform-secrets/infisical-universal-auth` exist. Provision credentials through the established secret workflow; do not place them in Helm values or Git. The Operator scope includes `development-tools` for the opt-in [Infisical-to-Helm probe](tests/infisical-helm-probe/README.md); the probe uses a dedicated Infisical path and creates no public Service.
 - A new Infisical PostgreSQL installation needs a default StorageClass. The checked-in StatefulSet manifest leaves its class unset. On an existing installation, keep the bound PVC and StatefulSet template unchanged; this field is immutable and reapplying the manifest will fail.
 - Set `INFISICAL_PROJECT_SLUG` and `INFISICAL_ENV_SLUG` to the active Infisical project and environment. Override the chart's sample scope for every deployment.
+
+### Local registry route
+
+KuchDesk does not install the local registry. On this Docker Desktop KIND
+installation, its existing Deployment uses `hostNetwork: true` and listens at
+`127.0.0.1:5001` inside the node. Docker Desktop's default containerd route
+sends unmatched registries through a separate mirror container; that container
+cannot reach the node's loopback listener. The checked-in setup command adds
+only `/etc/containerd/certs.d/localhost:5001/hosts.toml` inside
+`desktop-control-plane`:
+
+```toml
+server = "http://127.0.0.1:5001"
+```
+
+Run from the repository root after the registry Pod is Ready:
+
+```sh
+python3 lab/scripts/local-registry-route.py
+```
+
+This command requires Python 3.11 or newer. It checks the Docker Desktop
+context, Ready node, registry binding and Pod ownership, container identity,
+and containerd registry config path. It accepts an exact
+existing route, refuses a different route in either supported `localhost:5001`
+directory spelling, and never edits `_default/hosts.toml`. Re-running it is
+safe. It does not restart containerd or deploy workloads. The route uses plain
+HTTP only on the node's IPv4 loopback; it does not expose the registry on the
+KIND bridge or host. Docker Desktop may replace the node during cluster
+recreation, so re-run the command before the next local image deployment.
+
+To validate a particular image after setup, pull its immutable digest through
+the node's CRI and compare the returned image identity with the expected
+digest. A CRI pull changes the node image store; do it only for an approved
+image. To undo only this route, first verify the file still contains the exact
+line above, then remove that file and its empty `localhost:5001` directory
+inside `desktop-control-plane`. The prior default mirror route will apply again.
 
 ## Deployment order
 

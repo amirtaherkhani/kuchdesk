@@ -40,7 +40,7 @@ func fixture(t *testing.T) (Service, Config) {
 
 		"colima --profile kuchdesk-fresh ssh -- cat /etc/machine-id":                                         []byte("fixture-machine"),
 		"colima --profile kuchdesk-fresh status":                                                             []byte("running"),
-		"route -n get default":                                                                               []byte("interface: en0\npassword=LEAKED_SECRET\n"),
+		"route -n get 192.0.2.1":                                                                             []byte("interface: en0\npassword=LEAKED_SECRET\n"),
 		"colima --profile kuchdesk-fresh nerdctl -- --namespace k8s.io info --format {{json .}}":             []byte(`{"Driver":"overlayfs","ServerVersion":"v2.1.3"}`),
 		"kubectl --context colima-kuchdesk-fresh get nodes -o json":                                          []byte(`{"items":[{"status":{"nodeInfo":{"kubeletVersion":"v1.35.0+k3s1","containerRuntimeVersion":"containerd://29.0.0","machineID":"fixture-machine"},"conditions":[{"type":"Ready","status":"True"}]},"token":"LEAKED_SECRET"}]}`),
 		"kubectl --context colima-kuchdesk-fresh top nodes --no-headers":                                     []byte("colima-kuchdesk-fresh 367m 3% 6928Mi 24%\n"),
@@ -145,14 +145,20 @@ func TestDoctorConcurrentRequestsRemainIndependent(t *testing.T) {
 	group.Wait()
 }
 
-func TestDoctorFlagsVPNDefaultRouteWithoutBlockingOtherChecks(t *testing.T) {
+func TestDoctorChecksConfiguredIngressRouteInsteadOfVPNDefaultRoute(t *testing.T) {
 	service, config := fixture(t)
 	fake := service.Commands.(commandFake)
-	fake.outputs["route -n get default"] = []byte("interface: utun6\n")
+	fake.outputs["route -n get 192.0.2.1"] = []byte("interface: bridge100\n")
 	service.Commands = fake
 	report, err := service.Run(context.Background(), config)
-	if err != nil || !report.Healthy || report.Checks[0].Status != "warn" || len(report.Findings) != 1 {
-		t.Fatalf("VPN report: %+v %v", report, err)
+	if err != nil || !report.Healthy || report.Checks[0].Status != "ok" || len(report.Findings) != 0 {
+		t.Fatalf("local ingress route report: %+v %v", report, err)
+	}
+	fake.outputs["route -n get 192.0.2.1"] = []byte("interface: utun6\n")
+	service.Commands = fake
+	report, err = service.Run(context.Background(), config)
+	if err != nil || !report.Healthy || report.Checks[0].Status != "warn" || report.Checks[0].ErrorClass != "vpn_route" {
+		t.Fatalf("VPN ingress route report: %+v %v", report, err)
 	}
 }
 

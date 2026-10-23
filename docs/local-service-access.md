@@ -7,6 +7,20 @@ and KIND describe historical installations, not fresh-install prerequisites.
 Observed versions on 2026-10-19 were Colima 0.10.3, Lima 2.2.1, containerd 2.3.1
 and k3s v1.35.0+k3s1; they are evidence, not permanent version restrictions.
 
+## Service YAML and credentials
+
+Service configuration may use multiple YAML files when each has a distinct
+purpose. Keep tracked `values.yaml` for non-secret chart defaults. Put private
+machine-specific overrides and credentials in ignored files with mode `0600`,
+using the filenames and install path documented by that service: charts that
+consume a private overlay use `values.local.yaml`; services that provision
+credentials separately use `auth.local.yaml` and a namespaced Kubernetes
+Secret. Do not assume a local file is not passed to Helm. Tracked examples may
+show key names and placeholder values only. Exclude private files from chart
+packages with `.helmignore` when they are under a chart directory. Split files
+by purpose; do not duplicate settings across YAML files without a consumer
+that requires it.
+
 ## Connection contracts
 
 Observability ingestion is separate from browser panels. Alloy OTLP/HTTP accepts

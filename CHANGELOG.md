@@ -4,6 +4,8 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-23
+
 ### Added
 
 - Add shared Colima/k3s service publication, direct-YAML configuration, and
@@ -13,6 +15,8 @@ All notable KuchDesk changes are documented in this file.
 
 - Move fresh local infrastructure guidance and service workflows to Colima,
   containerd, and k3s.
+- Include Alloy publication values in the supported direct-YAML configuration
+  catalog.
 
 ### Removed
 
@@ -421,6 +425,8 @@ All notable KuchDesk changes are documented in this file.
 [0.8.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.7.0...v0.8.0
 [0.9.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.8.0...v0.9.0
 [0.10.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.9.0...v0.10.0
-[Unreleased]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.13.0...main
+[Unreleased]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.14.0...main
+[0.14.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.13.1...v0.14.0
+[0.13.1]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.11.1...v0.12.0

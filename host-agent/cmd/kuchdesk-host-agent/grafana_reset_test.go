@@ -30,7 +30,7 @@ func TestGrafanaResetRequiresHiddenMatchingEntryAndFinalConsent(t *testing.T) {
 				first, second = []byte(" Dummy-password-only! "), []byte(" Dummy-password-only! ")
 			}
 			reads, submits := 0, 0
-			err := runGrafanaAdminPasswordReset(context.Background(), []string{"--kube-context", "dummy-context", "--user-id", "42"}, io.Discard,
+			err := runGrafanaAdminPasswordReset(context.Background(), []string{"--kube-context", "colima-dummy", "--user-id", "42"}, io.Discard,
 				func() (io.ReadWriteCloser, error) { return terminal, nil },
 				func(ctx context.Context, terminal io.ReadWriteCloser) ([]byte, error) {
 					reads++
@@ -44,7 +44,7 @@ func TestGrafanaResetRequiresHiddenMatchingEntryAndFinalConsent(t *testing.T) {
 				},
 				func(ctx context.Context, cluster string, id int, password []byte) error {
 					submits++
-					if cluster != "dummy-context" || id != 42 || string(password) != "Dummy-password-only!" {
+					if cluster != "colima-dummy" || id != 42 || string(password) != "Dummy-password-only!" {
 						t.Fatal("wrong reset target or input")
 					}
 					if _, ok := ctx.Deadline(); !ok {
@@ -76,7 +76,7 @@ func TestGrafanaResetRequiresHiddenMatchingEntryAndFinalConsent(t *testing.T) {
 			if reads >= 2 && !bytes.Equal(second, make([]byte, len(second))) {
 				t.Fatal("confirmation password retained")
 			}
-			if !strings.Contains(terminal.output.String(), "Infisical") {
+			if !strings.Contains(terminal.output.String(), "bootstrap") {
 				t.Fatal("missing independent-bootstrap warning")
 			}
 		})
@@ -84,7 +84,7 @@ func TestGrafanaResetRequiresHiddenMatchingEntryAndFinalConsent(t *testing.T) {
 }
 
 func TestGrafanaResetRejectsPasswordArgumentsAndInvalidUserID(t *testing.T) {
-	for _, args := range [][]string{{"--kube-context", "dummy", "--password", "Dummy-password-only!"}, {"--kube-context", "dummy", "--user-id", "0"}, {"--kube-context", "dummy", "--user-id", "-3"}, {"--kube-context", "dummy", "Dummy-password-only!"}} {
+	for _, args := range [][]string{{"--kube-context", "colima-dummy", "--password", "Dummy-password-only!"}, {"--kube-context", "colima-dummy", "--user-id", "0"}, {"--kube-context", "colima-dummy", "--user-id", "-3"}, {"--kube-context", "colima-dummy", "Dummy-password-only!"}} {
 		err := runGrafanaAdminPasswordReset(context.Background(), args, io.Discard,
 			func() (io.ReadWriteCloser, error) { t.Fatal("invalid options opened terminal"); return nil, nil }, nil, nil)
 		if err == nil || strings.Contains(err.Error(), "Dummy-password-only!") {
@@ -106,7 +106,7 @@ func TestGrafanaResetSendsPasswordOnlyOnStdinAndSanitizesOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", dir)
-		err := resetGrafanaAdminPassword(context.Background(), "dummy-context", 42, []byte("Dummy-password-only!"))
+		err := resetGrafanaAdminPassword(context.Background(), "colima-dummy", 42, []byte("Dummy-password-only!"))
 		if failure {
 			if err == nil || strings.Contains(err.Error(), "Dummy-password-only!") {
 				t.Fatal("reset failure leaked")
@@ -118,7 +118,7 @@ func TestGrafanaResetSendsPasswordOnlyOnStdinAndSanitizesOutput(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		want := "--context dummy-context --request-timeout=30s -n observability exec -i deployment/grafana -c grafana -- grafana cli --homepath /usr/share/grafana --config /etc/grafana/grafana.ini --configOverrides cfg:default.paths.data=/var/lib/grafana admin reset-admin-password --password-from-stdin --user-id 42\n"
+		want := "--context colima-dummy --request-timeout=30s -n observability exec -i deployment/grafana -c grafana -- grafana cli --homepath /usr/share/grafana --config /etc/grafana/grafana.ini --configOverrides cfg:default.paths.data=/var/lib/grafana admin reset-admin-password --password-from-stdin --user-id 42\n"
 		if string(args) != want {
 			t.Fatal("password in argv or reset target changed")
 		}

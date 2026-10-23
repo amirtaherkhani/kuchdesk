@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-local-dashboard-smoke
+  namespace: platform-tests
+  labels:
+    kuchdesk.io/acceptance: k6-local-dashboard
+data:
+  index.html: kuchdesk-owned-synthetic-target
+  test.js: |
+    import http from 'k6/http';
+    import { check, sleep } from 'k6';
+    export const options = {
+      vus: 1,
+      iterations: 20,
+      maxRedirects: 0,
+      thresholds: {
+        http_req_failed: ['rate==0'],
+        checks: ['rate==1'],
+        http_req_duration: ['p(95)<1000'],
+      },
+      tags: { testrun_name: __ENV.RUN_ID, project: 'kuchdesk-local-smoke' },
+    };
+    export function setup() {
+      console.log(JSON.stringify({service_name: 'kuchdesk-k6-smoke', level: 'info',
+        deployment_environment: 'development', event_name: 'smoke-start', run_id: __ENV.RUN_ID}));
+    }
+    export default function () {
+      const response = http.get('http://127.0.0.1:8080/');
+      check(response, {
+        'owned target returns 200': r => r.status === 200,
+        'owned target body matches': r => r.body.trim() === 'kuchdesk-owned-synthetic-target',
+      });
+      sleep(1);
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: k6-local-smoke-
+  namespace: platform-tests
+  labels:
+    kuchdesk.io/acceptance: k6-local-dashboard
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        kuchdesk.io/acceptance: k6-local-dashboard
+    spec:
+      restartPolicy: Never
+      # The synthetic sidecar has no state; bound its post-run shutdown.
+      terminationGracePeriodSeconds: 5
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        runAsGroup: 12345
+        fsGroup: 12345
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: synthetic-target
+          restartPolicy: Always
+          image: docker.io/rancher/mirrored-library-busybox@sha256:101b4afd76732482eff9b95cae5f94bcf295e521fbec4e01b69c5421f3f3f3e5
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -c]
+          args: ['trap "kill $server; wait $server; exit 0" TERM; httpd -f -p 127.0.0.1:8080 -h /scripts & server=$!; wait $server']
+          startupProbe:
+            exec: {command: [wget, -q, -O, /dev/null, 'http://127.0.0.1:8080/']}
+            periodSeconds: 1
+            failureThreshold: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 5m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 32Mi}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+      containers:
+        - name: k6
+          image: docker.io/grafana/k6:2.0.0@sha256:a33a0cfdc4d2483d6b7a3a22e726a499ff2831a671a49239104cd34a9937523c
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -c]
+          args:
+            - >-
+              k6 version;
+              k6 run --no-usage-report -o experimental-prometheus-rw --summary-export=/results/summary.json /scripts/test.js;
+              result=$?; echo "KUCHDESK_K6_EXIT=$result";
+              sleep 45; exit "$result"
+          env:
+            - name: RUN_ID
+              valueFrom:
+                fieldRef: {fieldPath: "metadata.labels['batch.kubernetes.io/job-name']"}
+            - {name: K6_PROMETHEUS_RW_SERVER_URL, value: 'http://monitoring-kube-prometheus-prometheus.observability.svc:9090/api/v1/write'}
+            - {name: K6_PROMETHEUS_RW_TREND_STATS, value: 'p(95),p(99),min,max,avg'}
+            - {name: K6_PROMETHEUS_RW_PUSH_INTERVAL, value: 2s}
+            - {name: K6_WEB_DASHBOARD, value: 'true'}
+            - {name: K6_WEB_DASHBOARD_HOST, value: 0.0.0.0}
+            - {name: K6_WEB_DASHBOARD_PORT, value: '5665'}
+            - {name: K6_WEB_DASHBOARD_PERIOD, value: 1s}
+            - {name: K6_WEB_DASHBOARD_EXPORT, value: /results/dashboard.html}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            - {name: results, mountPath: /results}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: scripts
+          configMap: {name: k6-local-dashboard-smoke}
+        - {name: results, emptyDir: {sizeLimit: 32Mi}}
+        - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: k6-local-dashboard-smoke
+  namespace: platform-tests
+  labels:
+    kuchdesk.io/acceptance: k6-local-dashboard
+spec:
+  podSelector:
+    matchLabels: {kuchdesk.io/acceptance: k6-local-dashboard}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: observability}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: prometheus}
+      ports: [{protocol: TCP, port: 9090}]
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]

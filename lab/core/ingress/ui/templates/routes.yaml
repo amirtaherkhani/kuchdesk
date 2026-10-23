@@ -1,0 +1,112 @@
+{{- if not .Values.uiAccess.sourceRanges }}
+{{- fail "UI sourceRanges must not be empty" }}
+{{- end }}
+{{- $namespaces := dict }}
+{{- if .Values.maildevAPI.enabled }}{{- $_ := set $namespaces "vero" true }}{{- end }}
+{{- $hosts := dict }}
+{{- range $id, $service := .Values.services }}
+{{- if and $service.enabled $service.uiEnabled }}
+{{- if hasKey $hosts $service.uiDomain }}
+{{- fail "duplicate enabled UI domain" }}
+{{- end }}
+{{- $_ := set $hosts $service.uiDomain true }}
+{{- if ne $id "grafana" }}
+{{- if or (not (regexMatch "^[a-z0-9-]+\\.local\\.dev$" $service.uiDomain)) (not $service.uiPort) (not $service.backendService) (not $service.namespace) }}
+{{- fail "enabled UI requires a local.dev domain, namespace, backend Service and UI port" }}
+{{- end }}
+{{- $basic := not (has $id $.Values.uiAccess.nativeAuth) }}
+{{- $hasBasic := or $basic (default false (get $namespaces $service.namespace)) }}
+{{- $_ := set $namespaces $service.namespace $hasBasic }}
+{{- $routeID := $id }}
+{{- if eq $id "maildev-smtp" }}{{- $routeID = "maildev" }}{{- end }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kuchdesk-ui-{{ $routeID }}
+  namespace: {{ $service.namespace }}
+  labels:
+    app.kubernetes.io/part-of: kuchdesk
+spec:
+  entryPoints: [websecure]
+  tls: {}
+  routes:
+    - kind: Rule
+      {{- if eq $id "traefik" }}
+      match: Host(`{{ $service.uiDomain }}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
+      {{- else }}
+      match: Host(`{{ $service.uiDomain }}`)
+      {{- end }}
+      middlewares:
+        - name: kuchdesk-ui-mac
+        {{- if $basic }}
+        - name: kuchdesk-ui-login
+        {{- end }}
+      services:
+        {{- if eq $id "traefik" }}
+        - kind: TraefikService
+          name: api@internal
+        {{- else }}
+        - name: {{ $service.backendService }}
+          port: {{ $service.uiPort }}
+        {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $namespace, $basic := $namespaces }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: kuchdesk-ui-mac
+  namespace: {{ $namespace }}
+spec:
+  ipAllowList:
+    sourceRange:
+      {{- toYaml $.Values.uiAccess.sourceRanges | nindent 6 }}
+{{- if $basic }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: kuchdesk-ui-login
+  namespace: {{ $namespace }}
+spec:
+  basicAuth:
+    secret: {{ required "UI BasicAuth Secret reference is required" $.Values.uiAccess.basicAuthSecret }}
+    removeHeader: true
+    realm: KuchDesk local panels
+{{- end }}
+{{- end }}
+{{- range $id := list "maildev-smtp" "rabbitmq" }}
+{{- $service := index $.Values.services $id }}
+{{- if and $service $service.enabled $service.uiEnabled }}
+{{- $name := $service.backendService }}
+{{- $routeID := $id }}
+{{- if eq $id "maildev-smtp" }}{{- $routeID = "maildev" }}{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kuchdesk-ui-{{ $routeID }}
+  namespace: {{ $service.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+      app.kubernetes.io/instance: {{ last (splitList "/" $service.owner) }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+              app.kubernetes.io/instance: traefik-kube-system
+      ports:
+        - protocol: TCP
+          port: {{ $service.uiPort }}
+{{- end }}
+{{- end }}

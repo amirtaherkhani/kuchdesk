@@ -1,0 +1,9 @@
+# Server values copied from Finance's dependency chart; credentials remain external.
+storageClass: local-path
+postgresql:
+  image: docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+  credentialsSecret: postgresql-auth
+  storage: 8Gi
+publication:
+  enabled: true
+  port: 20003

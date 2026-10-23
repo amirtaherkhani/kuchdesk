@@ -245,13 +245,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authenticate(next http.Handler) http.Handler {
-	if s.bearerToken == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "Bearer "
 		authorization := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authorization, prefix) ||
+		if s.bearerToken == "" || !strings.HasPrefix(authorization, prefix) ||
 			!constantTimeEqual(strings.TrimPrefix(authorization, prefix), s.bearerToken) {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})

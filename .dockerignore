@@ -1,0 +1,8 @@
+**
+!kuchdesk-agent/
+!kuchdesk-agent/**
+**/values.local.yaml
+**/.kuchdesk-values.lock
+**/.git
+**/bin
+**/*.log

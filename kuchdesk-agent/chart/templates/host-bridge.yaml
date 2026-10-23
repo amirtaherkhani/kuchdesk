@@ -1,0 +1,22 @@
+{{- if and .Values.hostBridge.enabled .Values.hostBridge.token }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ printf "%s-bridge-auth" (include "kuchdesk-agent.fullname" . | trunc 51 | trimSuffix "-") }}
+  labels:
+    {{- include "kuchdesk-agent.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  {{ .Values.hostBridge.tokenKey }}: {{ .Values.hostBridge.token | quote }}
+{{- end }}
+{{- if and .Values.hostBridge.enabled .Values.hostBridge.caPEM }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-bridge-ca" (include "kuchdesk-agent.fullname" . | trunc 53 | trimSuffix "-") }}
+  labels:
+    {{- include "kuchdesk-agent.labels" . | nindent 4 }}
+data:
+  {{ .Values.hostBridge.caKey }}: {{ .Values.hostBridge.caPEM | quote }}
+{{- end }}

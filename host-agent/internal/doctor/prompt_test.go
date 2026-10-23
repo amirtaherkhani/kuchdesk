@@ -28,7 +28,7 @@ func TestNormalizeExcerptPreservesEvidenceButRedactsSecrets(t *testing.T) {
 }
 
 func TestPromptTemplateAndSchemaUseCurrentReport(t *testing.T) {
-	config := Config{Domain: "infisical.local.dev", KubeContext: "docker-desktop", RegistryURL: "http://127.0.0.1:5001", DiskPath: "/tmp"}
+	config := Config{Domain: "grafana.local.dev", KubeContext: "colima-kuchdesk-fresh", RegistryURL: "http://127.0.0.1:5001", DiskPath: "/tmp"}
 	report := Report{SchemaVersion: "kuchdesk.doctor/v2", GeneratedAt: time.Now().UTC(), Healthy: false, Checks: []Check{{ID: "dns", Component: "host-dns", Status: "fail", Message: "Domain does not resolve", Source: "system-resolver", Context: "macos", ObservedAt: time.Now().UTC(), ErrorClass: "dns_lookup_failed", Truncated: false}}, Findings: []Finding{{CheckID: "dns", Severity: "fail", Problem: "Domain does not resolve", Recommendation: "Check DNS"}}, Limitations: []string{"Point-in-time"}}
 	text, err := RenderPrompt(config, report)
 	if err != nil {
@@ -77,13 +77,13 @@ func TestRepairPlanRejectsUnsupportedCommandsAndUnboundedLoops(t *testing.T) {
 }
 
 func TestVerificationRequiresFreshOKChecks(t *testing.T) {
-	report := Report{Checks: []Check{{ID: "dns", Status: "fail"}, {ID: "kind", Status: "ok"}}}
+	report := Report{Checks: []Check{{ID: "dns", Status: "fail"}, {ID: "kubernetes", Status: "ok"}}}
 	result, err := Verify(report, []string{"dns"})
 	if err != nil || result.Success {
 		t.Fatalf("failed check marked repaired: %+v %v", result, err)
 	}
 	report.Checks[0].Status = "ok"
-	result, err = Verify(report, []string{"dns", "kind"})
+	result, err = Verify(report, []string{"dns", "kubernetes"})
 	if err != nil || !result.Success {
 		t.Fatalf("fresh healthy checks rejected: %+v %v", result, err)
 	}
@@ -97,7 +97,7 @@ func TestRepairPlanRequiresExactSequenceAndSingleProfile(t *testing.T) {
 		{Tool: "kuchdesk_deploy_plan", Profile: "agent.json"},
 		{Tool: "kuchdesk_deploy_preflight", Profile: "agent.json"},
 		{Tool: "kuchdesk_deploy_start", Profile: "agent.json", Confirm: "kuchdesk-agent/development-tools"},
-		{Tool: "kuchdesk_doctor_verify", CheckIDs: []string{"kind"}},
+		{Tool: "kuchdesk_doctor_verify", CheckIDs: []string{"kubernetes"}},
 	}
 	for name, mutate := range map[string]func([]PlanStep){
 		"changed-profile":         func(steps []PlanStep) { steps[1].Profile = "other.json" },
@@ -114,8 +114,8 @@ func TestRepairPlanRequiresExactSequenceAndSingleProfile(t *testing.T) {
 			}
 		})
 	}
-	report := Report{Checks: []Check{{ID: "kind", Status: "ok"}}}
-	if _, err := Verify(report, []string{"kind", "kind"}); err == nil {
+	report := Report{Checks: []Check{{ID: "kubernetes", Status: "ok"}}}
+	if _, err := Verify(report, []string{"kubernetes", "kubernetes"}); err == nil {
 		t.Fatal("duplicate verification check accepted")
 	}
 }

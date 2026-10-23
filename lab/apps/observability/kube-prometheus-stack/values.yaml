@@ -5,10 +5,19 @@ prometheus:
       repository: prom/prometheus
       tag: "v3.13.1"
     retention: 3d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
     # Required for k6's experimental-prometheus-rw output.
     enableRemoteWriteReceiver: true
 
-# Docker Desktop's local control-plane components are not exposed as stable
+# The local K3s control-plane components are not exposed as stable
 # scrape Services.
 kubeControllerManager:
   enabled: false
@@ -29,7 +38,7 @@ defaultRules:
     KubeEtcdDown: true
     KubeProxyDown: true
     KubeSchedulerDown: true
-    # Docker Desktop's VM does not expose a stable NTP scrape endpoint.
+    # The Colima VM does not provide a configured NTP scrape endpoint.
     NodeClockNotSynchronising: true
 
 grafana:

@@ -12,4 +12,4 @@ Kubernetes recording/alert rules.
 | Retention | 5 days for local development |
 | Dashboards | Provisioned into Grafana |
 
-Docker Desktop control-plane endpoints are scraped only when available.
+K3s control-plane components without stable scrape Services remain disabled; bundled metrics-server is verified during later preflight.

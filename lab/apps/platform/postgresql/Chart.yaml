@@ -1,0 +1,4 @@
+apiVersion: v2
+name: postgresql
+version: 0.1.0
+appVersion: "17.6-alpine"

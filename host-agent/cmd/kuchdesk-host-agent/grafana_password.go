@@ -2,24 +2,25 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/amirtaherkhani/kuchdesk/configyaml"
+	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/localruntime"
 	"golang.org/x/sys/unix"
+	"gopkg.in/yaml.v3"
 )
 
-const grafanaPasswordUsage = "Usage: kuchdesk-host-agent grafana-admin-password --kube-context CONTEXT\nReveal the Grafana bootstrap password from observability/grafana-admin in your local terminal.\nThis value may not authenticate after a Grafana database password change.\n"
+const grafanaPasswordUsage = "Usage: kuchdesk-host-agent grafana-admin-password --values-root PROJECT_ROOT\nReveal the Grafana bootstrap password from private local chart YAML in your terminal.\nThis value may not authenticate after a Grafana database password change.\n"
 
 func runGrafanaAdminPassword(ctx context.Context, args []string, help io.Writer, openTerminal func() (io.ReadWriteCloser, error), readPassword func(context.Context, string) ([]byte, error)) error {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -28,7 +29,7 @@ func runGrafanaAdminPassword(ctx context.Context, args []string, help io.Writer,
 		}
 		return nil
 	}
-	cluster, _, err := parseGrafanaPasswordArgs(args, false)
+	root, err := parseGrafanaValuesArgs(args)
 	if err != nil {
 		return err
 	}
@@ -39,7 +40,7 @@ func runGrafanaAdminPassword(ctx context.Context, args []string, help io.Writer,
 	defer terminal.Close()
 	ctx, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()
-	if _, err := fmt.Fprintf(terminal, "Cluster: %s\nSource: observability/grafana-admin / GRAFANA_ADMIN_PASSWORD (bootstrap only).\nThis value may not authenticate after a Grafana database password change.\nIt will be visible in this terminal's scrollback.\nType REVEAL GRAFANA BOOTSTRAP PASSWORD to reveal: ", cluster); err != nil {
+	if _, err := fmt.Fprintf(terminal, "Source: private Grafana chart YAML (bootstrap only).\nThis value may not authenticate after a Grafana database password change.\nIt will be visible in this terminal's scrollback.\nType REVEAL GRAFANA BOOTSTRAP PASSWORD to reveal: "); err != nil {
 		return errors.New("cannot write terminal prompt")
 	}
 	if !grafanaConfirmed(ctx, terminal, "REVEAL GRAFANA BOOTSTRAP PASSWORD") {
@@ -47,10 +48,10 @@ func runGrafanaAdminPassword(ctx context.Context, args []string, help io.Writer,
 	}
 	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	password, err := readPassword(readCtx, cluster)
+	password, err := readPassword(readCtx, root)
 	defer clear(password)
 	if err != nil {
-		return errors.New("cannot read Grafana bootstrap password using existing Kubernetes access")
+		return errors.New("cannot read Grafana bootstrap password from private local YAML")
 	}
 	if !validGrafanaPassword(password) {
 		return errors.New("bootstrap password is empty, oversized or unsafe for terminal display")
@@ -90,59 +91,48 @@ func openGrafanaTerminal() (io.ReadWriteCloser, error) {
 	return os.NewFile(uintptr(fd), "Grafana interactive terminal"), nil
 }
 
-func readGrafanaBootstrapPassword(ctx context.Context, kubeContext string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	args := []string{"--context", kubeContext, "--request-timeout=10s", "-n", "observability"}
-	var access grafanaBoundedOutput
-	defer func() { clear(access.data) }()
-	cmd := exec.CommandContext(ctx, "kubectl", append(args, "auth", "can-i", "get", "secret/grafana-admin")...)
-	cmd.Stdout = &access
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil || string(bytes.TrimSpace(access.data)) != "yes" {
-		return nil, errors.New("existing access does not permit reading Grafana bootstrap Secret")
+func readGrafanaBootstrapPassword(ctx context.Context, root string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, errors.New("Grafana bootstrap read cancelled")
 	}
-	var encoded grafanaBoundedOutput
-	defer func() { clear(encoded.data) }()
-	cmd = exec.CommandContext(ctx, "kubectl", append(args, "get", "secret", "grafana-admin", "-o", "jsonpath={.data.GRAFANA_ADMIN_PASSWORD}")...)
-	cmd.Stdout = &encoded
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
-		return nil, errors.New("Grafana bootstrap Secret read failed")
+	data, _, err := chartvalues.Read(root, "grafana", "values.local.yaml")
+	if err != nil {
+		return nil, errors.New("Grafana private local YAML unavailable")
 	}
-	password := make([]byte, base64.StdEncoding.DecodedLen(len(encoded.data)))
-	n, err := base64.StdEncoding.Decode(password, bytes.TrimSpace(encoded.data))
-	if err != nil || !validGrafanaPassword(password[:n]) {
-		clear(password)
-		return nil, errors.New("invalid Grafana bootstrap password")
+	defer clear(data)
+	var values struct {
+		AdminPassword string `yaml:"adminPassword"`
 	}
-	return password[:n], nil
+	if err := yaml.Unmarshal(data, &values); err != nil || !validGrafanaPassword([]byte(values.AdminPassword)) {
+		return nil, errors.New("Grafana bootstrap password missing or invalid")
+	}
+	return []byte(values.AdminPassword), nil
 }
 
-// Bound kubectl output before decoding, including a misbehaving executable.
-type grafanaBoundedOutput struct{ data []byte }
-
-func (w *grafanaBoundedOutput) Write(p []byte) (int, error) {
-	if len(w.data)+len(p) > 8192 {
-		return 0, errors.New("output exceeds limit")
+func parseGrafanaValuesArgs(args []string) (string, error) {
+	f := flag.NewFlagSet("grafana-password", flag.ContinueOnError)
+	f.SetOutput(io.Discard)
+	root := f.String("values-root", "", "absolute KuchDesk source root")
+	if err := f.Parse(args); err != nil || f.NArg() != 0 || !filepath.IsAbs(*root) {
+		return "", errors.New("an absolute --values-root is required")
 	}
-	w.data = append(w.data, p...)
-	return len(p), nil
+	return *root, nil
 }
 
-func parseGrafanaPasswordArgs(args []string, reset bool) (string, int, error) {
+func parseGrafanaPasswordArgs(args []string) (string, int, error) {
 	f := flag.NewFlagSet("grafana-password", flag.ContinueOnError)
 	f.SetOutput(io.Discard) // Never echo unknown arguments or their values.
 	cluster := f.String("kube-context", "", "explicit Kubernetes context")
 	id := 1
-	if reset {
-		f.IntVar(&id, "user-id", 1, "verified Grafana admin user ID")
-	}
+	f.IntVar(&id, "user-id", 1, "verified Grafana admin user ID")
 	if err := f.Parse(args); err != nil || f.NArg() != 0 {
 		return "", 0, errors.New("invalid options; use --help")
 	}
 	if strings.TrimSpace(*cluster) == "" || len(*cluster) > 253 || strings.TrimSpace(*cluster) != *cluster || !validGrafanaPassword([]byte(*cluster)) {
 		return "", 0, errors.New("a printable --kube-context is required")
+	}
+	if _, err := localruntime.Profile(*cluster); err != nil {
+		return "", 0, err
 	}
 	if id <= 0 {
 		return "", 0, errors.New("--user-id must be positive")

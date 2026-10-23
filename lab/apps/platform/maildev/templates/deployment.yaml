@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finance-maildev
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: finance-maildev
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: finance-maildev
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: maildev
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --smtp
+            - {{ .Values.smtpPort | quote }}
+            - --web
+            - {{ .Values.webPort | quote }}
+            - --ip
+            - 0.0.0.0
+            - --web-ip
+            - 0.0.0.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: smtp
+              containerPort: {{ .Values.smtpPort }}
+            - name: web
+              containerPort: {{ .Values.webPort }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: web
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            tcpSocket:
+              port: smtp
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: web
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.resources | indent 12 }}

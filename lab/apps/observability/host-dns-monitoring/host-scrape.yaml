@@ -10,6 +10,6 @@ spec:
   scrapeTimeout: 10s
   staticConfigs:
     - targets:
-        - host.docker.internal:9101
+        - 192.168.64.1:9101
       labels:
         host: macos

@@ -114,6 +114,13 @@ func TestHostBridgeRoutesRequireAgentBearerAndStayAbsentByDefault(t *testing.T) 
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("authorized host route returned %d", response.Code)
 	}
+	request = httptest.NewRequest(http.MethodGet, "/v1/manage/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer agent-token")
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("host bridge enabled Kubernetes management: %d", response.Code)
+	}
 }
 
 func TestEventsRejectsRequestsUntilInformerCachesAreReady(t *testing.T) {
@@ -123,11 +130,12 @@ func TestEventsRejectsRequestsUntilInformerCachesAreReady(t *testing.T) {
 		staticSource{ready: false},
 		stream.NewBroker("homelab", 8),
 		dnsconfig.New(kubernetesfake.NewSimpleClientset(), dnsconfig.Options{}),
-		"",
+		"test-token",
 		time.Second,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	request := httptest.NewRequest(http.MethodGet, "/v1/events", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable ||
@@ -154,7 +162,7 @@ func TestSSEStartsWithSnapshotAndSupportsStreaming(t *testing.T) {
 		source,
 		broker,
 		dnsconfig.New(kubernetesfake.NewSimpleClientset(), dnsconfig.Options{}),
-		"",
+		"test-token",
 		time.Second,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	).Handler())
@@ -166,6 +174,7 @@ func TestSSEStartsWithSnapshotAndSupportsStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.Header.Set("Authorization", "Bearer test-token")
 	response, err := server.Client().Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +235,7 @@ func TestSSEHistoryGapSendsCurrentSnapshotWithoutStaleReplay(t *testing.T) {
 		},
 		broker,
 		dnsconfig.New(kubernetesfake.NewSimpleClientset(), dnsconfig.Options{}),
-		"",
+		"test-token",
 		20*time.Millisecond,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	).Handler())
@@ -239,6 +248,7 @@ func TestSSEHistoryGapSendsCurrentSnapshotWithoutStaleReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Last-Event-ID", "1")
+	request.Header.Set("Authorization", "Bearer test-token")
 	response, err := server.Client().Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +288,7 @@ func TestSSEInitialConnectionSkipsHistoricalReplay(t *testing.T) {
 		},
 		broker,
 		dnsconfig.New(kubernetesfake.NewSimpleClientset(), dnsconfig.Options{}),
-		"",
+		"test-token",
 		20*time.Millisecond,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	).Handler())
@@ -290,6 +300,7 @@ func TestSSEInitialConnectionSkipsHistoricalReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.Header.Set("Authorization", "Bearer test-token")
 	response, err := server.Client().Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -391,12 +402,13 @@ func TestDNSConfigurationEndpointIsReadOnlyWhenDisabled(t *testing.T) {
 			CorefileKey:   "Corefile",
 			ClusterDomain: "cluster.local",
 		}),
-		"",
+		"test-token",
 		time.Second,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
 	getRequest := httptest.NewRequest(http.MethodGet, "/v1/dns/config", nil)
+	getRequest.Header.Set("Authorization", "Bearer test-token")
 	getResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(getResponse, getRequest)
 	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"enabled":false`) {
@@ -408,6 +420,7 @@ func TestDNSConfigurationEndpointIsReadOnlyWhenDisabled(t *testing.T) {
 		"/v1/dns/config",
 		strings.NewReader(`{"resourceVersion":"1","aliases":[]}`),
 	)
+	putRequest.Header.Set("Authorization", "Bearer test-token")
 	putResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(putResponse, putRequest)
 	if putResponse.Code != http.StatusForbidden {
@@ -422,7 +435,7 @@ func TestDNSConfigurationEndpointRejectsAmbiguousJSON(t *testing.T) {
 		staticSource{ready: true},
 		stream.NewBroker("homelab", 8),
 		dnsconfig.New(kubernetesfake.NewSimpleClientset(), dnsconfig.Options{}),
-		"",
+		"test-token",
 		time.Second,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
@@ -433,6 +446,7 @@ func TestDNSConfigurationEndpointRejectsAmbiguousJSON(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPut, "/v1/dns/config", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer test-token")
 			response := httptest.NewRecorder()
 			server.Handler().ServeHTTP(response, request)
 			if response.Code != http.StatusBadRequest {
@@ -484,5 +498,32 @@ func TestManagementHandlerRemainsDisabledUntilConfiguredAndUsesBearerAuth(t *tes
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("authorized status = %d", response.Code)
+	}
+}
+
+func TestMissingBearerFailsClosedAndHostFileRoutesAreAbsent(t *testing.T) {
+	server := New(staticSource{ready: true}, stream.NewBroker("test", 8), nil, "", time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, path := range []string{"/v1/platform", "/v1/snapshot", "/v1/events", "/v1/dns/config"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer ")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("anonymous %s status = %d", path, response.Code)
+		}
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(method, "/v1/config/values/agent/values.local.yaml", nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("direct host file route status = %d", response.Code)
+		}
+	}
+	for _, path := range []string{"/healthz", "/readyz"} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("probe %s status = %d", path, response.Code)
+		}
 	}
 }

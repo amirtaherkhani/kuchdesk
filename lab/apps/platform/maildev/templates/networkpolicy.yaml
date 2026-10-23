@@ -1,0 +1,15 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: finance-maildev-no-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: finance-maildev
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.smtpPort }}
+  egress: []

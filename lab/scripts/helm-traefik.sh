@@ -4,7 +4,8 @@ set -euo pipefail
 umask 077
 
 case "${1:-}" in
-  template|upgrade) ;;
+  template) ;;
+  upgrade) printf "K3s owns bundled Traefik. Use helm-service.py traefik --context COLIMA_CONTEXT; no second controller is installed.\n" >&2; exit 2 ;;
   *) printf 'Usage: %s {template|upgrade} traefik CHART [helm arguments]\n' "$0" >&2; exit 2 ;;
 esac
 case "$(helm version --short)" in

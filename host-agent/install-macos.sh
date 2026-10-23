@@ -14,11 +14,12 @@ if [[ -z "${kubectl_bin}" || ! -x "${kubectl_bin}" ]]; then
 fi
 kubectl_bin="$(cd "$(dirname "${kubectl_bin}")" && pwd -P)/$(basename "${kubectl_bin}")"
 kube_context="${KUCHDESK_HOST_AGENT_KUBE_CONTEXT:-}"
-if [[ -z "${kube_context}" ]]; then
-  kube_context="$("${kubectl_bin}" config current-context)"
+if [[ ! "${kube_context}" =~ ^colima(-[a-z0-9][a-z0-9-]*)?$ ]]; then
+  echo "Set KUCHDESK_HOST_AGENT_KUBE_CONTEXT to the approved Colima context." >&2
+  exit 1
 fi
-if [[ -z "${kube_context}" ]]; then
-  echo "Select a Kubernetes context or set KUCHDESK_HOST_AGENT_KUBE_CONTEXT." >&2
+if [[ -z "${KUCHDESK_HOST_AGENT_TARGET_IP:-}" ]]; then
+  echo "Set KUCHDESK_HOST_AGENT_TARGET_IP to the verified Colima ingress address." >&2
   exit 1
 fi
 zone="${KUCHDESK_HOST_AGENT_ZONE:-}"
@@ -38,12 +39,21 @@ if (( interval < 5 || interval > 3600 )); then
 fi
 bin_dir="${HOME}/.local/bin"
 agent_dir="${HOME}/Library/LaunchAgents"
-log_dir="${HOME}/Library/Logs/KuchDesk"
+log_dir="${KUCHDESK_HOST_AGENT_LOG_DIR:-${HOME}/Library/Logs/KuchDesk}"
 label="dev.kuchdesk.host-agent"
 plist="${agent_dir}/${label}.plist"
 bin="${bin_dir}/kuchdesk-host-agent"
 
 mkdir -p "${bin_dir}" "${agent_dir}" "${log_dir}"
+chmod 0700 "${log_dir}"
+for log in "${log_dir}/host-agent.log" "${log_dir}/host-agent.error.log"; do
+  if [[ -L "${log}" ]]; then
+    echo "Refusing a symlinked Host Agent log: ${log}" >&2
+    exit 1
+  fi
+  touch "${log}"
+  chmod 0600 "${log}"
+done
 if [[ -e "${plist}" ]] && ! /usr/libexec/PlistBuddy -c 'Print :KuchDeskManaged' "${plist}" 2>/dev/null | grep -qx true; then
   echo "Refusing to replace an existing unmanaged LaunchAgent: ${plist}" >&2
   exit 1
@@ -52,25 +62,24 @@ fi
 (cd "${script_dir}" && go build -o "${bin}.new" ./cmd/kuchdesk-host-agent)
 chmod 0700 "${bin}.new"
 
-python3 - "${plist}.new" "${label}" "${bin}" "${log_dir}" "${HOME}" "${kube_context}" "${zone}" "${kubectl_bin}" "${interval}" <<'PY'
+python3 - "${plist}.new" "${label}" "${bin}" "${log_dir}" "${HOME}" "${kube_context}" "${zone}" "${kubectl_bin}" "${interval}" "$(cd "${script_dir}/.." && pwd -P)" <<'PY'
 import os
 import plistlib
 import sys
 
-path, label, binary, log_dir, home, kube_context, zone, kubectl_bin, interval = sys.argv[1:]
+path, label, binary, log_dir, home, kube_context, zone, kubectl_bin, interval, values_root = sys.argv[1:]
 arguments = [
     binary,
     '-kube-context', kube_context,
     '-zone', zone,
     '-kubectl', kubectl_bin,
+    '-values-root', values_root,
 ]
 for variable, option in (
-    ('KUCHDESK_HOST_AGENT_INTERFACE', '-interface'),
     ('KUCHDESK_HOST_AGENT_TARGET_IP', '-target-ip'),
+    ('KUCHDESK_HOST_AGENT_KUBE_API_SERVER', '-kube-api-server'),
     ('KUCHDESK_HOST_AGENT_NAMESPACE', '-namespace'),
     ('KUCHDESK_HOST_AGENT_SERVICE', '-service'),
-    ('KUCHDESK_HOST_AGENT_ADMIN_SECRET', '-admin-secret'),
-    ('KUCHDESK_HOST_AGENT_PASSWORD_KEY', '-password-key'),
     ('KUCHDESK_HOST_AGENT_ADMIN_USER', '-admin-user'),
     ('KUCHDESK_HOST_AGENT_API_PORT', '-api-port'),
     ('KUCHDESK_HOST_AGENT_TTL', '-ttl'),
@@ -100,10 +109,10 @@ with open(path, 'wb') as file:
 PY
 chmod 0600 "${plist}.new"
 plutil -lint "${plist}.new" >/dev/null
-if [[ -e "${plist}" ]]; then
+if [[ -e "${plist}" ]] && launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)/${label}"
 fi
 mv "${bin}.new" "${bin}"
 mv "${plist}.new" "${plist}"
 launchctl bootstrap "gui/$(id -u)" "${plist}"
-echo "Installed ${label}; checks the current LAN IP every ${interval} seconds."
+echo "Installed ${label}; reconciles the configured Colima ingress address every ${interval} seconds."

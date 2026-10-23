@@ -1,6 +1,9 @@
 {{- if not .Values.image.repository }}
 {{- fail "image.repository is required." }}
 {{- end }}
+{{- if hasKey .Values "configFiles" }}
+{{- fail "configFiles is no longer supported; Helm supplies Pod ENV and Secrets from canonical YAML." }}
+{{- end }}
 {{- if hasKey .Values.agent "listenAddress" }}
 {{- fail "agent.listenAddress is no longer supported; set agent.listenHost and service.targetPort instead." }}
 {{- end }}
@@ -16,23 +19,20 @@
 {{- if eq .Values.image.tag "latest" }}
 {{- fail "image.tag must not be latest." }}
 {{- end }}
+{{- if not (regexMatch "^git-[0-9a-f]{12}(-dirty-[0-9a-f]{12})?$" .Values.image.tag) }}
+{{- fail "project-built image.tag must identify the verified source as git-<12-hex> or git-<12-hex>-dirty-<12-hex-input-hash>" }}
+{{- end }}
 {{- if and .Values.image.digest (not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.image.digest)) }}
 {{- fail "image.digest must be a sha256 digest." }}
 {{- end }}
-{{- if and .Values.dnsManagement.enabled (not .Values.auth.existingSecret) }}
-{{- fail "auth.existingSecret is required when dnsManagement.enabled=true." }}
+{{- if not (or .Values.auth.existingSecret .Values.auth.token) }}
+{{- fail "agent auth is required; configure auth.existingSecret or auth.token." }}
 {{- end }}
 {{- if and .Values.rbac.clusterAdmin (not .Values.rbac.create) }}
 {{- fail "rbac.create is required when rbac.clusterAdmin=true." }}
 {{- end }}
 {{- if and .Values.rbac.clusterAdmin (not .Values.serviceAccount.create) }}
 {{- fail "serviceAccount.create is required when rbac.clusterAdmin=true to use a dedicated identity." }}
-{{- end }}
-{{- if and .Values.rbac.clusterAdmin (not .Values.auth.existingSecret) }}
-{{- fail "auth.existingSecret is required when rbac.clusterAdmin=true." }}
-{{- end }}
-{{- if and .Values.agent.managementEnabled (not .Values.auth.existingSecret) }}
-{{- fail "auth.existingSecret is required when agent.managementEnabled=true." }}
 {{- end }}
 {{- if and .Values.agent.managementEnabled (not .Values.rbac.clusterAdmin) }}
 {{- fail "rbac.clusterAdmin is required when agent.managementEnabled=true." }}
@@ -43,14 +43,23 @@
 {{- if and .Values.agent.portForwardEnabled (not .Values.agent.managementEnabled) }}
 {{- fail "agent.managementEnabled is required when agent.portForwardEnabled=true." }}
 {{- end }}
-{{- if or (hasKey .Values.hostBridge "token") (hasKey .Values.hostBridge "clientId") (hasKey .Values.hostBridge "clientSecret") }}
-{{- fail "hostBridge accepts only existing Secret references, never literal credentials." }}
+{{- if and .Values.auth.existingSecret .Values.auth.token }}
+{{- fail "choose auth.existingSecret or auth.token, not both." }}
 {{- end }}
-{{- if and .Values.hostBridge.enabled (not .Values.agent.managementEnabled) }}
-{{- fail "agent.managementEnabled is required when hostBridge.enabled=true." }}
+{{- if or (hasKey .Values.hostBridge "clientId") (hasKey .Values.hostBridge "clientSecret") }}
+{{- fail "hostBridge clientId and clientSecret are unsupported." }}
 {{- end }}
-{{- if and .Values.hostBridge.enabled (or (not .Values.auth.existingSecret) (not .Values.hostBridge.tokenSecretName) (not (regexMatch "^https://[^/?#@]+/?$" .Values.hostBridge.url))) }}
-{{- fail "hostBridge requires agent auth, an HTTPS origin, and an existing bridge token Secret." }}
+{{- if and .Values.hostBridge.token .Values.hostBridge.tokenSecretName }}
+{{- fail "choose hostBridge.token or hostBridge.tokenSecretName, not both." }}
+{{- end }}
+{{- if and .Values.hostBridge.caPEM .Values.hostBridge.caConfigMapName }}
+{{- fail "choose hostBridge.caPEM or hostBridge.caConfigMapName, not both." }}
+{{- end }}
+{{- if and .Values.hostBridge.token (lt (len .Values.hostBridge.token) 32) }}
+{{- fail "hostBridge.token must contain at least 32 characters." }}
+{{- end }}
+{{- if and .Values.hostBridge.enabled (or (not (or .Values.auth.existingSecret .Values.auth.token)) (not (or .Values.hostBridge.tokenSecretName .Values.hostBridge.token)) (not (regexMatch "^https://[^/?#@]+/?$" .Values.hostBridge.url))) }}
+{{- fail "hostBridge requires agent auth, an HTTPS origin, and a dedicated bridge token or existing Secret." }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -70,9 +79,14 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations (and .Values.hostBridge.enabled (or .Values.hostBridge.caConfigMapName .Values.hostBridge.caPEM)) }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.hostBridge.enabled (or .Values.hostBridge.caConfigMapName .Values.hostBridge.caPEM) }}
+        checksum/host-bridge-ca: {{ (default .Values.hostBridge.caConfigMapName .Values.hostBridge.caPEM) | sha256sum | quote }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "kuchdesk-agent.serviceAccountName" . }}
@@ -135,9 +149,9 @@ spec:
             - name: KUCHDESK_HOST_BRIDGE_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.hostBridge.tokenSecretName | quote }}
+                  name: {{ default (printf "%s-bridge-auth" (include "kuchdesk-agent.fullname" . | trunc 51 | trimSuffix "-")) .Values.hostBridge.tokenSecretName | quote }}
                   key: {{ .Values.hostBridge.tokenKey | quote }}
-            {{- if .Values.hostBridge.caConfigMapName }}
+            {{- if or .Values.hostBridge.caConfigMapName .Values.hostBridge.caPEM }}
             - name: KUCHDESK_HOST_BRIDGE_CA_FILE
               value: /etc/kuchdesk/host-bridge/ca.crt
             {{- end }}
@@ -148,14 +162,14 @@ spec:
               value: {{ required "dnsManagement.configMapName is required" .Values.dnsManagement.configMapName | quote }}
             - name: KUCHDESK_COREDNS_COREFILE_KEY
               value: {{ required "dnsManagement.corefileKey is required" .Values.dnsManagement.corefileKey | quote }}
-            {{- with .Values.auth.existingSecret }}
+            {{- if or .Values.auth.existingSecret .Values.auth.token }}
             - name: KUCHDESK_AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ . | quote }}
+                  name: {{ default (printf "%s-auth" (include "kuchdesk-agent.fullname" .)) .Values.auth.existingSecret | quote }}
                   key: {{ $.Values.auth.tokenKey | quote }}
             {{- end }}
-          {{- if and .Values.hostBridge.enabled .Values.hostBridge.caConfigMapName }}
+          {{- if and .Values.hostBridge.enabled (or .Values.hostBridge.caConfigMapName .Values.hostBridge.caPEM) }}
           volumeMounts:
             - name: host-bridge-ca
               mountPath: /etc/kuchdesk/host-bridge
@@ -179,11 +193,11 @@ spec:
             failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if and .Values.hostBridge.enabled .Values.hostBridge.caConfigMapName }}
+      {{- if and .Values.hostBridge.enabled (or .Values.hostBridge.caConfigMapName .Values.hostBridge.caPEM) }}
       volumes:
         - name: host-bridge-ca
           configMap:
-            name: {{ .Values.hostBridge.caConfigMapName | quote }}
+            name: {{ default (printf "%s-bridge-ca" (include "kuchdesk-agent.fullname" . | trunc 53 | trimSuffix "-")) .Values.hostBridge.caConfigMapName | quote }}
             items:
               - key: {{ .Values.hostBridge.caKey | quote }}
                 path: ca.crt

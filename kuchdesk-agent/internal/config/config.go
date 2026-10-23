@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -86,6 +87,7 @@ func Load() (Config, error) {
 			return Config{}, errors.New("invalid base project selector")
 		}
 	}
+
 	var err error
 	if cfg.DNSManagementEnabled, err = boolEnv("KUCHDESK_DNS_MANAGEMENT_ENABLED", false); err != nil {
 		return Config{}, err
@@ -117,7 +119,6 @@ func Load() (Config, error) {
 	if cfg.EventLimit, err = intEnv("KUCHDESK_EVENT_LIMIT", cfg.EventLimit, 0, 1000); err != nil {
 		return Config{}, err
 	}
-
 	if cfg.ClusterID == "" {
 		return Config{}, errors.New("KUCHDESK_CLUSTER_ID is required")
 	}
@@ -127,16 +128,13 @@ func Load() (Config, error) {
 	if cfg.ClusterDomain == "" {
 		return Config{}, errors.New("KUCHDESK_CLUSTER_DOMAIN cannot be empty")
 	}
+	if cfg.BearerToken == "" {
+		return Config{}, errors.New("KUCHDESK_AGENT_TOKEN is required")
+	}
 	if cfg.DNSManagementEnabled {
-		if cfg.BearerToken == "" {
-			return Config{}, errors.New("KUCHDESK_AGENT_TOKEN is required when DNS management is enabled")
-		}
 		if cfg.CoreDNSNamespace == "" || cfg.CoreDNSConfigMap == "" || cfg.CoreDNSCorefileKey == "" {
 			return Config{}, errors.New("CoreDNS namespace, ConfigMap, and Corefile key cannot be empty")
 		}
-	}
-	if cfg.ManagementEnabled && cfg.BearerToken == "" {
-		return Config{}, errors.New("KUCHDESK_AGENT_TOKEN is required when management is enabled")
 	}
 	if cfg.ExecEnabled && !cfg.ManagementEnabled {
 		return Config{}, errors.New("KUCHDESK_MANAGEMENT_ENABLED is required when exec is enabled")
@@ -144,8 +142,8 @@ func Load() (Config, error) {
 	if cfg.PortForwardEnabled && !cfg.ManagementEnabled {
 		return Config{}, errors.New("KUCHDESK_MANAGEMENT_ENABLED is required when port-forward is enabled")
 	}
-	if cfg.HostBridgeEnabled && (!cfg.ManagementEnabled || cfg.BearerToken == "" || cfg.HostBridgeURL == "" || len(cfg.HostBridgeToken) < 32) {
-		return Config{}, errors.New("host bridge requires management, agent bearer, HTTPS URL, and a dedicated bridge bearer")
+	if cfg.HostBridgeEnabled && (cfg.BearerToken == "" || cfg.HostBridgeURL == "" || len(cfg.HostBridgeToken) < 32) {
+		return Config{}, errors.New("host bridge requires agent bearer, HTTPS URL, and a dedicated bridge bearer")
 	}
 	return cfg, nil
 }
@@ -162,6 +160,9 @@ func RESTConfig(cfg Config) (*rest.Config, error) {
 		}
 	}
 	if restConfig == nil {
+		if !regexp.MustCompile(`^colima(?:-[a-z0-9][a-z0-9-]{0,62})?$`).MatchString(cfg.KubeContext) {
+			return nil, errors.New("host execution requires an explicit Colima context; current-context fallback is disabled")
+		}
 		rules := clientcmd.NewDefaultClientConfigLoadingRules()
 		if cfg.Kubeconfig != "" {
 			rules.Precedence = filepath.SplitList(cfg.Kubeconfig)

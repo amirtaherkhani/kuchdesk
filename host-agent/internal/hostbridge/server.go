@@ -12,12 +12,7 @@ import (
 	"time"
 
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/doctor"
-	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/infisical"
 )
-
-type Commander interface {
-	Execute(context.Context, infisical.Command) (infisical.CommandResult, error)
-}
 
 type Diagnostician interface {
 	Run(context.Context, doctor.Config) (doctor.Report, error)
@@ -26,17 +21,17 @@ type Diagnostician interface {
 // Server handles one authenticated host command surface. It is independent of
 // listener setup, so the network service can remain disabled by default.
 type Server struct {
-	Commands Commander
-	Doctor   Diagnostician
-	Token    string
-	slots    chan struct{}
+	Doctor        Diagnostician
+	Token         string
+	ServiceAccess func(context.Context) (map[string]any, error)
+	slots         chan struct{}
 }
 
-func New(commands Commander, diagnostics Diagnostician, token string) (*Server, error) {
-	if len(token) < 32 || commands == nil || diagnostics == nil {
-		return nil, errors.New("host bridge requires commands, Doctor, and a private bearer token")
+func New(diagnostics Diagnostician, token string) (*Server, error) {
+	if len(token) < 32 || diagnostics == nil {
+		return nil, errors.New("host bridge requires Doctor and a private bearer token")
 	}
-	return &Server{Commands: commands, Doctor: diagnostics, Token: token, slots: make(chan struct{}, 8)}, nil
+	return &Server{Doctor: diagnostics, Token: token, slots: make(chan struct{}, 8)}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -44,8 +39,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("POST /v1/infisical/commands", s.command)
 	mux.HandleFunc("POST /v1/doctor", s.doctor)
+	mux.HandleFunc("GET /v1/service-access", s.serviceAccess)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.URL.Path != "/healthz" {
@@ -69,23 +64,19 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
-func (s *Server) command(w http.ResponseWriter, r *http.Request) {
-	var command infisical.Command
-	if !decode(w, r, &command) {
+func (s *Server) serviceAccess(w http.ResponseWriter, r *http.Request) {
+	if s.ServiceAccess == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "service_access_unavailable"})
 		return
 	}
-	if !infisical.ReadOperation(command.Operation) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "read_only_bridge"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	result, err := s.Commands.Execute(ctx, command)
+	report, err := s.ServiceAccess(ctx)
 	if err != nil {
-		writeError(w, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "service_access_unavailable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, report)
 }
 
 func (s *Server) doctor(w http.ResponseWriter, r *http.Request) {
@@ -120,29 +111,6 @@ func decode(w http.ResponseWriter, r *http.Request, output any) bool {
 		return false
 	}
 	return true
-}
-
-func writeError(w http.ResponseWriter, err error) {
-	status := http.StatusServiceUnavailable
-	code := "infisical_unavailable"
-	var api *infisical.APIError
-	switch {
-	case errors.Is(err, infisical.ErrInvalidCommand), errors.Is(err, infisical.ErrInvalidScope):
-		status, code = http.StatusBadRequest, "invalid_command"
-	case errors.Is(err, infisical.ErrProjectDenied):
-		status, code = http.StatusForbidden, "project_denied"
-	case errors.Is(err, infisical.ErrConfirmation):
-		status, code = http.StatusConflict, "confirmation_required"
-	case errors.As(err, &api) && api.StatusCode == http.StatusForbidden:
-		status, code = http.StatusForbidden, "upstream_permission_denied"
-	case errors.As(err, &api) && api.StatusCode == http.StatusNotFound:
-		status, code = http.StatusNotFound, "not_found"
-	case errors.As(err, &api) && api.StatusCode == http.StatusConflict:
-		status, code = http.StatusConflict, "upstream_conflict"
-	case errors.As(err, &api) && api.StatusCode == http.StatusTooManyRequests:
-		status, code = http.StatusTooManyRequests, "upstream_rate_limited"
-	}
-	writeJSON(w, status, map[string]string{"error": code})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

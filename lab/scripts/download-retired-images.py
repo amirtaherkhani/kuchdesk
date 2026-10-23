@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Restore three explicitly retired upstream images; never remove or deploy anything.
 
-Python 3 and Docker are required. Default: Docker desktop-linux only.
-Add --node desktop-control-plane to restore the selected KIND node store too.
+Python 3 and Colima containerd are required. An explicit Colima profile is required.
+Images are pulled into the Kubernetes-visible k8s.io namespace.
 Use --alloy-only for the retained Alloy version instead of the three retired images.
 Registry availability is checked by the actual pinned pull when needed, not assumed.
 """
@@ -12,7 +12,6 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 
 
 PLATFORM = "linux/arm64"
@@ -45,7 +44,7 @@ def required(args):
     result = command(args)
     if result.returncode:
         raise RuntimeError(f"{args[0]} {args[1]} failed (exit {result.returncode}); "
-                           "check Docker, network/access and pinned registry availability")
+                           "check Colima containerd, network/access and pinned registry availability")
     return result.stdout.decode().strip()
 
 
@@ -62,130 +61,98 @@ def canonical(ref):
     return repo + "@" + digest
 
 
-def host_complete(docker, ref):
-    fmt = ('{"digests":{{json .RepoDigests}},"os":{{json .Os}},'
-           '"arch":{{json .Architecture}},"variant":{{json (index . "Variant")}}}')
-    result = command(docker + ["image", "inspect", "--format", fmt, ref])
-    if result.returncode:
-        return False
+def native_matches(raw, ref):
+    """nerdctl may return the requested reference and config-ID aliases."""
     try:
-        image = json.loads(result.stdout)
-        if image["os"] + "/" + image["arch"] != PLATFORM:
+        images = json.loads(raw)
+        if not isinstance(images, list) or not images:
             return False
-        if (image.get("variant") or "") != VARIANTS.get(ref, ""):
-            return False
-        if ref not in {canonical(x) for x in image.get("digests") or []}:
-            return False
-    except (ValueError, KeyError, TypeError):
+        for image in images:
+            metadata = image["Image"]
+            target = metadata.get("Target", metadata.get("target", {}))
+            config = image["ImageConfig"]
+            if target["digest"] != ref.rsplit("@", 1)[1]:
+                return False
+            if config["os"] + "/" + config["architecture"] != PLATFORM:
+                return False
+            if (config.get("variant") or "") != VARIANTS.get(ref, ""):
+                return False
+        return True
+    except (ValueError, KeyError, TypeError, AttributeError, IndexError):
         return False
-    # A temporary save verifies all required local bytes without creating a backup.
-    with tempfile.TemporaryFile() as archive:
-        return command(docker + ["image", "save", "--platform", image_platform(ref), ref],
-                       stdout=archive).returncode == 0
 
 
-def node_content_complete(docker, node, ref):
-    result = command(docker + ["exec", node, "ctr", "-n", "k8s.io", "images",
-                              "check", "--quiet", "name==" + ref])
-    return result.returncode == 0 and ref in result.stdout.decode().split()
-
-
-def node_complete(docker, node, ref, config_id):
-    result = command(docker + ["exec", node, "crictl", "inspecti", ref])
-    if result.returncode:
+def store_complete(nerdctl, ctr, ref):
+    result = command(nerdctl + ["image", "inspect", "--mode=native", "--platform", image_platform(ref), ref])
+    if result.returncode or not native_matches(result.stdout, ref):
         return False
-    try:
-        image = json.loads(result.stdout)
-        spec = image["info"]["imageSpec"]
-        if spec["os"] + "/" + spec["architecture"] != PLATFORM:
-            return False
-        if spec.get("variant", "") != VARIANTS.get(ref, ""):
-            return False
-        if image["status"]["id"] != config_id:
-            return False
-        if ref not in {canonical(x) for x in image["status"]["repoDigests"]}:
-            return False
-    except (ValueError, KeyError, TypeError):
-        return False
-    return node_content_complete(docker, node, ref)
+    # Quiet check lists only fully downloaded and unpacked native-platform refs.
+    # No image export/archive is created.
+    complete = command(ctr + ["images", "check", "--quiet", "name==" + canonical(ref)])
+    return complete.returncode == 0 and canonical(ref) in {
+        canonical(x) for x in complete.stdout.decode().splitlines()}
 
 
-def ensure_alloy_tag(docker, verify_only):
-    result = command(docker + ["image", "inspect", "--format", "{{json .RepoDigests}}", ALLOY_TAG])
+def ensure_alloy_tag(nerdctl, verify_only):
+    result = command(nerdctl + ["image", "inspect", "--mode=native", "--platform", image_platform(ALLOY[0]), ALLOY_TAG])
     if result.returncode == 0:
-        if ALLOY[0] not in {canonical(x) for x in json.loads(result.stdout) or []}:
+        if not native_matches(result.stdout, ALLOY[0]):
             raise RuntimeError("existing Alloy tag has different content; refusing overwrite")
         return
-    tags = required(docker + ["image", "ls", "--all", "--format", "{{.Repository}}:{{.Tag}}"])
-    if ALLOY_TAG in tags.splitlines() or verify_only:
+    tags = required(nerdctl + ["images", "--format", "{{.Repository}}:{{.Tag}}"])
+    if "docker.io/" + ALLOY_TAG in {canonical_tag(x) for x in tags.splitlines()} or verify_only:
         raise RuntimeError("Alloy active tag cannot be verified; refusing overwrite")
-    required(docker + ["image", "tag", ALLOY[0], ALLOY_TAG])
+    required(nerdctl + ["tag", ALLOY[0], ALLOY_TAG])
 
 
-def restore(docker, nodes, verify_only, images=None):
-    for ref, config_id in IMAGES if images is None else images:
-        if not host_complete(docker, ref):
+def canonical_tag(ref):
+    first = ref.split("/", 1)[0]
+    if "." not in first and ":" not in first and first != "localhost":
+        return "docker.io/" + ("library/" if "/" not in ref else "") + ref
+    return ref
+
+
+def restore(nerdctl, ctr, verify_only, images=None):
+    for ref, _config_id in IMAGES if images is None else images:
+        if not store_complete(nerdctl, ctr, ref):
             if verify_only:
-                raise RuntimeError("Docker digest/platform/content unavailable: " + ref)
-            print("Downloading to Docker:", ref, flush=True)
-            required(docker + ["pull", "--platform", image_platform(ref), ref])
-            if not host_complete(docker, ref):
-                raise RuntimeError("Docker digest/platform/content verification failed: " + ref)
-        print("Docker verified:", ref, flush=True)
+                raise RuntimeError("containerd digest/platform/content unavailable: " + ref)
+            # A successful store inventory is required before any pull; command
+            # failures do not establish that immutable content is absent.
+            required(ctr + ["images", "list", "--quiet"])
+            print("Downloading to containerd k8s.io:", ref, flush=True)
+            required(nerdctl + ["pull", "--platform", image_platform(ref), ref])
+            if not store_complete(nerdctl, ctr, ref):
+                raise RuntimeError("containerd digest/platform/content verification failed: " + ref)
+        print("containerd k8s.io verified:", ref, flush=True)
         if ref == ALLOY[0]:
-            ensure_alloy_tag(docker, verify_only)
-        for node in nodes:
-            if not node_complete(docker, node, ref, config_id):
-                if verify_only:
-                    raise RuntimeError("Node digest/platform/content unavailable: " + node + " " + ref)
-                print("Restoring selected node:", node, ref, flush=True)
-                # Each node is a separate store. Keep its normal transfer verifier policy.
-                required(docker + ["exec", node, "ctr", "-n", "k8s.io", "images",
-                                   "pull", "--platform", image_platform(ref), ref])
-                if not node_content_complete(docker, node, ref):
-                    required(docker + ["exec", node, "ctr", "-n", "k8s.io", "content",
-                                       "fetch", "--platform", image_platform(ref), ref])
-                required(docker + ["exec", node, "crictl", "pull", ref])
-                if not node_complete(docker, node, ref, config_id):
-                    raise RuntimeError("Node digest/platform/content verification failed: " + node + " " + ref)
-            print("Node verified:", node, ref, flush=True)
+            ensure_alloy_tag(nerdctl, verify_only)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--docker-context", default="desktop-linux")
+    parser.add_argument("--colima-profile", required=True)
     parser.add_argument("--alloy-only", action="store_true",
                         help="restore only the exact retained Alloy digest and active tag")
-    parser.add_argument("--node", action="append", default=[],
-                        help="explicit existing KIND container name; repeat for another node")
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--plan", action="store_true", help="print exact scope; no Docker calls")
+    modes.add_argument("--plan", action="store_true", help="print exact scope; no runtime calls")
     modes.add_argument("--verify-only", action="store_true", help="check existing stores; no downloads")
     args = parser.parse_args(argv)
     images = (ALLOY,) if args.alloy_only else IMAGES
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.docker_context):
-        parser.error("invalid explicit Docker context")
-    if len(set(args.node)) != len(args.node) or any(not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", x) for x in args.node):
-        parser.error("invalid or repeated node name")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", args.colima_profile):
+        parser.error("invalid explicit Colima profile")
     if args.plan:
-        print(json.dumps({"platform": PLATFORM, "dockerContext": args.docker_context,
-                          "selectedNodes": args.node, "images": [x[0] for x in images],
+        print(json.dumps({"platform": PLATFORM, "colimaProfile": args.colima_profile, "runtime": "containerd", "namespace": "k8s.io",
+                          "images": [x[0] for x in images],
                           "imagePlatforms": {x[0]: image_platform(x[0]) for x in images},
                           "restoredTags": [ALLOY_TAG] if args.alloy_only else [],
                           "removal": False, "deployment": False}, indent=2))
         return 0
-    docker = ["docker", "--context", args.docker_context]
+    nerdctl = ["colima", "--profile", args.colima_profile, "nerdctl", "--", "--namespace", "k8s.io"]
+    ctr = ["colima", "--profile", args.colima_profile, "ssh", "--", "sudo", "ctr", "--namespace", "k8s.io"]
     try:
-        required(docker + ["info", "--format", "{{.ServerVersion}}"])
-        for node in args.node:
-            role = required(docker + ["container", "inspect", "--format",
-                                     '{{index .Config.Labels "io.x-k8s.kind.role"}}', node])
-            if role not in ("control-plane", "worker"):
-                raise RuntimeError("selected container is not a verified KIND node: " + node)
-            arch = required(docker + ["exec", node, "uname", "-m"])
-            if arch not in ("aarch64", "arm64"):
-                raise RuntimeError("selected node is not linux/arm64: " + node)
-        restore(docker, args.node, args.verify_only, images)
+        required(nerdctl + ["info", "--format", "{{.ServerVersion}}"])
+        restore(nerdctl, ctr, args.verify_only, images)
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
         print("Recovery stopped: " + str(error) + ". No image/data deletion or deployment was performed.", file=sys.stderr)
         return 1

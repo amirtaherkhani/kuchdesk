@@ -27,6 +27,12 @@
         "caKey": {
           "type": "string",
           "maxLength": 253
+        },
+        "token": {
+          "type": "string"
+        },
+        "caPEM": {
+          "type": "string"
         }
       }
     },

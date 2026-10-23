@@ -8,4 +8,4 @@ Use native local database dumps/exports without an additional encrypted containe
 - Account for credentials/keys and related state required by the application through its existing private workflow, without silently copying unrelated private session state.
 - Retain existing backup artifacts until a separate retention decision. A new native export does not authorize altering old encrypted backups.
 
-These are operational defaults, not a request to start a backup. The completed k6 namespace move involved no database dump or PVC operation. Infisical upgrade work is paused until the user reschedules it; no date is assigned.
+These are operational defaults, not a request to start a backup. The completed k6 namespace move involved no database dump or PVC operation.

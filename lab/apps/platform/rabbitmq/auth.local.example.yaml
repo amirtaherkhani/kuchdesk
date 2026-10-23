@@ -1,0 +1,10 @@
+# Copy to ignored auth.local.yaml with mode0600; values are supplied via Secret, never Helm.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbitmq-auth
+  namespace: platform-storage
+type: Opaque
+stringData:
+  definitions.json: REPLACE_WITH_APPROVED_DEFINITIONS
+  erlang-cookie: REPLACE_WITH_FRESH_RANDOM_COOKIE

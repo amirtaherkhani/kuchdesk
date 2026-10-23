@@ -14,7 +14,7 @@ import (
 )
 
 func TestReconcileDNSUsesConfiguredZoneAndRemainsIdempotent(t *testing.T) {
-	cfg, err := parseConfig([]string{"-kube-context", "kind-team", "-zone", "dev.example"})
+	cfg, err := parseConfig([]string{"-kube-context", "colima-team", "-zone", "dev.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,10 +103,7 @@ func TestReconcileUsesConfiguredContextAndMockTechnitium(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "kubectl-mock")
 	content := fmt.Sprintf(`#!/bin/sh
 case " $* " in
-  *" --context kind-team -n technitium get secret technitium-admin -o json "*)
-    printf '%%s\n' '{"data":{"DNS_SERVER_ADMIN_PASSWORD":"dGVzdC1wYXNzd29yZA=="}}'
-    ;;
-  *" --context kind-team -n technitium port-forward --address 127.0.0.1 svc/technitium :5380 "*)
+  *" --context colima-team -n technitium port-forward --address 127.0.0.1 svc/technitium :5380 "*)
     printf 'Forwarding from 127.0.0.1:%d -> 5380\n'
     exec sleep 10
     ;;
@@ -116,7 +113,8 @@ esac
 	if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := parseConfig([]string{"-kube-context", "kind-team", "-zone", "dev.example", "-target-ip", "127.0.0.1", "-ttl", "90", "-kubectl", script})
+	root := technitiumValuesFixture(t)
+	cfg, err := parseConfig([]string{"-kube-context", "colima-team", "-zone", "dev.example", "-target-ip", "127.0.0.1", "-ttl", "90", "-kubectl", script, "-values-root", root})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,13 +128,10 @@ esac
 	}
 }
 
-func TestConfiguredKubectlReadsCredentialAndStartsLocalForward(t *testing.T) {
+func TestLocalValuesSupplyCredentialAndKubectlStartsLocalForward(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "kubectl-mock")
 	content := `#!/bin/sh
 case " $* " in
-  *" get secret technitium-admin "*)
-    printf '%s\n' '{"data":{"DNS_SERVER_ADMIN_PASSWORD":"dGVzdC1wYXNzd29yZA=="}}'
-    ;;
   *" port-forward --address 127.0.0.1 svc/technitium :5380 "*)
     printf '%s\n' 'Forwarding from 127.0.0.1:49123 -> 5380'
     exec sleep 10
@@ -147,13 +142,14 @@ esac
 	if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := parseConfig([]string{"-kube-context", "kind-team", "-zone", "dev.example", "-kubectl", script})
+	root := technitiumValuesFixture(t)
+	cfg, err := parseConfig([]string{"-kube-context", "colima-team", "-zone", "dev.example", "-kubectl", script, "-values-root", root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	password, err := adminPassword(ctx, cfg)
+	password, err := adminPassword(cfg)
 	if err != nil || password != "test-password" {
 		t.Fatalf("credential = %q, error = %v", password, err)
 	}
@@ -167,8 +163,21 @@ esac
 	}
 }
 
+func technitiumValuesFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	path := filepath.Join(root, "lab/apps/platform/technitium/values.local.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("adminPassword: test-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestReconcileDNSUsesConfiguredTTL(t *testing.T) {
-	cfg, err := parseConfig([]string{"-kube-context", "kind-team", "-zone", "dev.example", "-ttl", "90"})
+	cfg, err := parseConfig([]string{"-kube-context", "colima-team", "-zone", "dev.example", "-ttl", "90"})
 	if err != nil {
 		t.Fatal(err)
 	}

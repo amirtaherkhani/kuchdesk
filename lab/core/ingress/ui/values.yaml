@@ -1,0 +1,16 @@
+# Merge lab/service-access.yaml directly; this chart owns no backend workloads.
+services: {}
+uiAccess:
+  sourceRanges: [192.168.64.1/32]
+  basicAuthSecret: kuchdesk-ui-basic-auth
+  nativeAuth: [rabbitmq, technitium]
+# Stable local networks; API authentication applies to every client mode.
+maildevAPI:
+  enabled: true
+  sourceRanges:
+    - 127.0.0.1/32
+    - 192.168.64.1/32
+    - 192.168.64.15/32
+    - 192.168.5.1/32
+    - 10.4.0.0/24
+    - 10.42.0.0/24

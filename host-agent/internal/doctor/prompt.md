@@ -33,7 +33,7 @@ Only the following actually implemented MCP tools may be used in this workflow. 
 3. Do not use the deployment tool for DNS, firewall, credential, RBAC, Keychain, or unrelated repairs. If no cataloged tool addresses the issue, stop with an evidence-based recommendation.
 
 ## Authorized execution and rollback
-The MCP client executes a validated tool call only within its current permissions. A deployment start may build and push an image, pre-pull it, and run atomic Helm upgrade. Helm atomic rollback applies to a Helm upgrade failure; a later rollout-status failure may leave a new release installed and requires inspection. Do not delete data, change grants, alter CoreDNS, or force a rollback based on this prompt alone.
+The MCP client executes a validated tool call only within its current permissions. A deployment start may build an image in the selected Colima containerd k8s.io store, persist its identity into canonical YAML, and run Helm 4 upgrade with rollback-on-failure. Helm rollback-on-failure applies to a Helm upgrade failure; a later rollout-status failure may leave a new release installed and requires inspection. Do not delete data, change grants, alter CoreDNS, or force a rollback based on this prompt alone.
 
 ## Recheck and success criteria
 After each action, wait for the corresponding job status, then call `kuchdesk_doctor_verify` for the affected check IDs. A repair succeeds only when fresh checks are OK and the verification tool reports success. Limit the workflow to two repair attempts, three diagnostic passes, and the existing tool deadlines. Stop on timeout, unsupported action, missing evidence, changed target, or verification failure.

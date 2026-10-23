@@ -14,6 +14,15 @@ generatorOptions:
     grafana_folder: /tmp/dashboards/Platform
 
 configMapGenerator:
+  - name: postgresql-server-dashboard
+    files:
+      - postgresql-server-dashboard.json
+  - name: redis-server-dashboard
+    files:
+      - redis-server-dashboard.json
+  - name: telemetry-backends-dashboard
+    files:
+      - telemetry-backends-dashboard.json
   - name: platform-observability-dashboard
     files:
       - platform-observability-dashboard.json

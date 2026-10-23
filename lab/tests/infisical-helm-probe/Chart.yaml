@@ -1,6 +1,0 @@
-apiVersion: v2
-name: kuchdesk-infisical-helm-probe
-description: Opt-in integration probe for Infisical Operator, Kubernetes Secret, and Helm workload readiness
-type: application
-version: 0.1.0
-appVersion: "1.0.0"

@@ -4,6 +4,21 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add shared Colima/k3s service publication, direct-YAML configuration, and
+  read-only endpoint visibility for host, container, and Pod clients.
+
+### Changed
+
+- Move fresh local infrastructure guidance and service workflows to Colima,
+  containerd, and k3s.
+
+### Removed
+
+- Remove Infisical ENV Manager integrations, configuration, charts, and MCP
+  functionality from active KuchDesk paths.
+
 ## [0.13.1] - 2026-10-14
 
 ### Fixed

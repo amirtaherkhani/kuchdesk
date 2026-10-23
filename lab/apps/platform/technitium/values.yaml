@@ -1,0 +1,8 @@
+image: docker.io/technitium/dns-server:15.5.1@sha256:b8efe03a5e3bdc6e9d2baff3f6e70c382c7f98afa2a7ca66f318d4b58a8d5944
+domain: dns.local.dev
+adminPassword: ""
+storageClassName: local-path
+storageSize: 2Gi
+lanService:
+  enabled: true
+  type: LoadBalancer

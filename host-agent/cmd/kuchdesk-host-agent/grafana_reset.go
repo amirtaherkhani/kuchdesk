@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const grafanaResetUsage = "Usage: kuchdesk-host-agent grafana-admin-password-reset --kube-context CONTEXT [--user-id ID]\nReset the Grafana database admin password using hidden terminal input and explicit final consent.\nUses existing Kubernetes exec access; default admin ID 1 must be verified by the user.\nInfisical and its bootstrap Secret remain unchanged; the bootstrap password may stop authenticating.\n"
+const grafanaResetUsage = "Usage: kuchdesk-host-agent grafana-admin-password-reset --kube-context CONTEXT [--user-id ID]\nReset the Grafana database admin password using hidden terminal input and explicit final consent.\nUses existing Kubernetes exec access; default admin ID 1 must be verified by the user.\nExisting bootstrap credentials may stop authenticating.\n"
 
 func runGrafanaAdminPasswordReset(ctx context.Context, args []string, help io.Writer, openTerminal func() (io.ReadWriteCloser, error), readHidden func(context.Context, io.ReadWriteCloser) ([]byte, error), reset func(context.Context, string, int, []byte) error) error {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -20,7 +20,7 @@ func runGrafanaAdminPasswordReset(ctx context.Context, args []string, help io.Wr
 		}
 		return nil
 	}
-	cluster, id, err := parseGrafanaPasswordArgs(args, true)
+	cluster, id, err := parseGrafanaPasswordArgs(args)
 	if err != nil {
 		return err
 	}
@@ -31,7 +31,7 @@ func runGrafanaAdminPasswordReset(ctx context.Context, args []string, help io.Wr
 	defer terminal.Close()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	if _, err := fmt.Fprintf(terminal, "Cluster: %s / observability / deployment/grafana\nGrafana admin user ID: %d (verify this account ID before proceeding).\nChanges the Grafana database only. Infisical and the bootstrap Secret remain unchanged; the bootstrap password may stop authenticating.\nNew Grafana admin password (hidden): ", cluster, id); err != nil {
+	if _, err := fmt.Fprintf(terminal, "Cluster: %s / observability / deployment/grafana\nGrafana admin user ID: %d (verify this account ID before proceeding).\nChanges the Grafana database only. Existing bootstrap credentials may stop authenticating.\nNew Grafana admin password (hidden): ", cluster, id); err != nil {
 		return errors.New("cannot write terminal prompt")
 	}
 	first, err := readHidden(ctx, terminal)
@@ -60,9 +60,9 @@ func runGrafanaAdminPasswordReset(ctx context.Context, args []string, help io.Wr
 	resetCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 	defer stop()
 	if err := reset(resetCtx, cluster, id, first); err != nil {
-		return errors.New("Grafana reset success is unconfirmed; check login yourself before retrying and verify existing Kubernetes exec access/admin user ID; Infisical unchanged")
+		return errors.New("Grafana reset success is unconfirmed; check login yourself before retrying and verify existing Kubernetes exec access/admin user ID")
 	}
-	if _, err := io.WriteString(terminal, "Grafana database password reset succeeded. Infisical/bootstrap Secret unchanged. Sign in yourself with the new password.\n"); err != nil {
+	if _, err := io.WriteString(terminal, "Grafana database password reset succeeded. Sign in yourself with the new password.\n"); err != nil {
 		return errors.New("cannot write reset result; password submission already completed")
 	}
 	return nil

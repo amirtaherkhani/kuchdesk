@@ -1,0 +1,8 @@
+# Copy to bridge-values.local.yaml with mode 0600; launch with -values <path>.
+# This explicit flag enables the listener without environment overrides.
+listen: 127.0.0.1:8181 # Set the verified Colima-reachable host interface before deployment.
+tlsCert: /ABSOLUTE/PATH/TO/bridge-cert.pem
+tlsKey: /ABSOLUTE/PATH/TO/bridge-key.pem
+token: REPLACE_WITH_A_NEW_RANDOM_BEARER_AT_LEAST_32_CHARACTERS
+projectRoot: /absolute/path/to/kuchdesk/worktree
+forwardingRecovery: false # Opt-in bounded recovery; inspect installed forwarder support first.

@@ -1,5 +1,51 @@
 # KuchDesk project rules
 
+## Local service access
+
+Follow [the canonical access guide](docs/local-service-access.md) for the
+`kuchdesk-fresh` profile. Preserve each Service's Helm owner and internal DNS.
+Allocate explicit TCP and UDP publication ports in `20000–20099` per protocol; Lima may also
+discover unrelated VM listeners in that range, so verify owner and backend.
+Never assume container localhost reaches the Mac; verify bridge routing. Do not
+silently bind Mac ports to a wildcard, kill another process's listener, repeat
+a completed Colima restart, or claim a path works from chart rendering or TCP
+connectivity alone. Distinguish planned, implemented, installed and live
+verified states. Offline checks do not prove scheduled Host Agent or MCP health.
+Keep credentials out of commands, logs, and reports. Shared PostgreSQL, Redis and RabbitMQ definitions
+retain Finance server behavior; preserve app ENV names and keep server ENV
+separate. Fresh credentials are explicit operator decisions and Helm consumes
+Secret references only. Preserve source definitions until a verified cutover.
+Measure ServiceLB source identity before changing ingress policy. Development
+SMTP may serve Mac, ordinary-container and Pod clients; keep it separate from
+its inbox API and HTTPS access. A cleared Mac port collision is not proof
+that Lima recovered; verify listener ownership and backend identity without
+killing the other process or restarting Colima.
+TCP and UDP use separate allocations. Lima2.2.1 has a documented cross-protocol
+number-deduplication defect; do not hide it by weakening catalog validation.
+Native TCP recovery receipts must match publication UID and SSH PID/start time
+before cleanup. SSH recovery does not cover UDP; verify
+the installed forwarder before claiming support. Status CLI/API/MCP calls are
+read-only. Optional Host Bridge recovery has its own explicit private-YAML
+setting and persistent retry budget; never enable it as a side effect of a
+status request or change the scheduled DNS Agent lifecycle.
+
+Host Bridge TLS must use the existing trusted Colima development CA. Keep its
+private signing key in the Kubernetes Secret and distribute only the public CA
+certificate to clients. The owned host certificate refresher may read the
+task-owned TLS Secret and reload only the owned Host Bridge after verifying a
+certificate change.
+
+For UI domains, follow the access guide's verified route configuration. Preserve
+native logins and keep MailDev inbox/API access separate from SMTP. Verify the
+client address at Traefik before applying a Mac allowlist; a masqueraded node
+address does not establish Mac-only access. Obtain the requested approval before
+activating additional UI access, credentials or NetworkPolicy allowances. The
+current UI/API release is kube-system/kuchdesk-ui; preserve backend owners.
+Its private auth YAML must remain excluded by .helmignore as well as .gitignore.
+The approved Local traffic policy has a VM wildcard health-check listener30689;
+do not call that a Mac listener or claim LAN isolation. DNS and wildcard
+certificate coverage alone are not successful UI acceptance.
+
 ## Project-built image versions
 
 Assign an explicit source-traceable version to every project-built service image, using that service's verified existing convention. The Host deployment workflow uses `git-<12-hex-source-commit>` from clean source and pins deployment by digest. Record the full source commit, declared application/release version and platform separately; chart package versions are not image build versions. Never use `latest` as the only identity or overwrite content behind an existing immutable tag. Verify local/registry tag absence or use a supported path to reuse its exact pinned artifact; unknown lookup failures do not prove absence. Do not create a release or invent another tag scheme just to rebuild. Follow the existing [build/deploy image guidance](host-agent/README.md#image-versions), including the operator collision gate that the current CLI does not automate. Retain publisher versions/digests for upstream images.
@@ -35,3 +81,9 @@ After an authorized task merge, check branches and worktrees independently befor
 3. Check every candidate. Evaluate each task-owned local branch, remote branch and worktree separately. Require verified integration, no unique unpreserved commits or files, and no active session, process, service or other task depending on the candidate. Inspect staged, unstaged, untracked and ignored files plus nested repositories before removing a worktree. Preserve useful artifacts in an agreed location and verify their preservation before removal. Preserve main/default, protected, shared and unrelated branches, release tags, and any item whose ownership, integration or active use is uncertain. Retain a verified recoverable reference to the original task tip.
 4. Remove eligible items. Recheck the exact candidate tips and worktree state immediately before removal; stop that candidate if they changed. Use normal non-forcing operations: `git worktree remove <path>`, `git branch -d <branch>`, and, when remote deletion is authorized, `git push <remote> --delete <branch>`. Remove only the inspected eligible task items on authorized hosts/remotes. Do not use force deletion, reset, clean or broad pruning to defeat a refusal. If normal deletion refuses, preserve the item and report why; continue with independent eligible items. A local branch deletion does not remove a remote branch.
 5. Verify completion. Read back local branches, actual remote branches and filesystem worktrees on the same authorized hosts/remotes. Confirm the agreed main and integrated commit remain intact. Report the integration SHA, removed branches/worktrees, and every kept task item with its reason and next action. Do not infer that branch cleanup succeeded from worktree removal alone, or claim a remote deletion from a cached ref disappearing.
+
+Protected MailDev API uses the existing panel login for all client modes. Keep raw unauthenticated backend1080 denied outside Traefik; use the stable authenticated API Service instead. Finance host-test auth/port alignment remains separate; see [access guide](docs/local-service-access.md).
+
+Shared MailDev API uses a stable authenticated Traefik Service for all Pods/ordinary containers/Mac clients. Do not pin access to ephemeral Pod IPs or enable raw unauthenticated1080. Preserve local source ranges and NodePort removal for MailDev publications; HTTPS panels retain their own policy.
+
+Observability paths have separate evidence requirements: Pod stdout is collected through Kubernetes; Mac/container logs need explicit OTLP log exporters. OTLP metrics, traces and logs are distinct signals and each must be wired and queried before being called supported. Do not grant telemetry agents containerd-socket or broad host-file access for discovery. Inspect the Mac scrape bind address; a working scrape from a wildcard listener does not mean LAN exposure is safe. Prometheus currently has a fresh 10Gi local-path PVC; its prior emptyDir history was not migrated, and persistence across a later Pod replacement is not verified until a sample survives one.

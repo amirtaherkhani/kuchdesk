@@ -1,0 +1,2 @@
+# Copy to values.local.yaml (Git-ignored, mode 0600) for a fresh installation.
+adminPassword: REPLACE_WITH_NEW_RANDOM_PASSWORD

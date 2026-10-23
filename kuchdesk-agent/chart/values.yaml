@@ -34,13 +34,16 @@ agent:
 
 auth:
   existingSecret: kuchdesk-agent-auth
+  token: ""
   tokenKey: KUCHDESK_AGENT_TOKEN
 
 hostBridge:
   enabled: false
   url: ""
+  token: "" # Private local YAML only; creates a dedicated Kubernetes Secret.
   tokenSecretName: ""
   tokenKey: KUCHDESK_HOST_BRIDGE_TOKEN
+  caPEM: "" # Public trust certificate; creates a dedicated ConfigMap.
   caConfigMapName: ""
   caKey: ca.crt
 

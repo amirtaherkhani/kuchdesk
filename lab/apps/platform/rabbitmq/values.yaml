@@ -1,0 +1,13 @@
+image: docker.io/library/rabbitmq:4.2-management-alpine@sha256:5606bedb254b7b5bcf890ad8d9237abb59f9bc0ee98d9e9b9f0c113f4f489b6c
+credentialsSecret: rabbitmq-auth
+storage: 4Gi
+storageClass: local-path
+publication:
+  enabled: true
+  port: 20005
+metrics:
+  enabled: true
+  # Native rabbitmq_prometheus is already enabled by the deployed image.
+  # Internal HTTP has no BasicAuth; NetworkPolicy restricts access to this Prometheus.
+  prometheusNamespace: observability
+  prometheusName: monitoring-kube-prometheus-prometheus

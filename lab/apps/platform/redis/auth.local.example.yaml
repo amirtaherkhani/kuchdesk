@@ -1,0 +1,9 @@
+# Copy to ignored auth.local.yaml with mode0600; values are supplied via Secret, never Helm.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-auth
+  namespace: platform-storage
+type: Opaque
+stringData:
+  users.acl: REPLACE_WITH_APPROVED_PROJECT_ACL

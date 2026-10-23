@@ -1,5 +1,7 @@
 # Namespace migration preparation
 
+> Historical migration record. Secret-manager resources and paths below describe the earlier cluster state; they are not part of the current source installation profile.
+
 Prepared from live metadata on 2026-10-10 and reverified on 2026-10-11. The approved k6, agent and Traefik stages are complete. Traefik completed at 14:49 UTC; see the [current acceptance report](observability-source-acceptance-2026-10-11.md#approved-loki-and-traefik-live-acceptance). Earlier inventories below retain their inspection context; the other namespace mappings remain preparation. The current profile remains operational. See the [namespace architecture](namespace-proposal.md).
 
 ## Current state

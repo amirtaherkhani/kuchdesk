@@ -15,7 +15,7 @@ import (
 const testToken = "0123456789abcdef0123456789abcdef"
 
 func TestClientRequiresHTTPSAndValidBearer(t *testing.T) {
-	for _, raw := range []string{"http://host.docker.internal:8181", "https://user:password@host:8181", "https://host:8181/commands", "https://host:8181?key=value"} {
+	for _, raw := range []string{"http://host.lima.internal:8181", "https://user:password@host:8181", "https://host:8181/commands", "https://host:8181?key=value"} {
 		if _, err := New(raw, testToken, ""); err == nil {
 			t.Fatalf("accepted invalid URL %q", raw)
 		}
@@ -29,7 +29,7 @@ func TestClientReachesHostDoctorOverTrustedTLS(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if (r.URL.Path != "/v1/doctor" && r.URL.Path != "/v1/infisical/commands") || r.Header.Get("Authorization") != "Bearer "+testToken {
+		if r.URL.Path != "/v1/doctor" || r.Header.Get("Authorization") != "Bearer "+testToken {
 			t.Errorf("unexpected host request path or authorization")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -55,12 +55,7 @@ func TestClientReachesHostDoctorOverTrustedTLS(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "kuchdesk.doctor/v2") || calls.Load() != 1 {
 		t.Fatalf("Doctor proxy = %d %s, calls=%d", response.Code, response.Body, calls.Load())
 	}
-	command := httptest.NewRequest(http.MethodPost, "/v1/host/infisical/commands", strings.NewReader(`{"operation":"project.list"}`))
-	response = httptest.NewRecorder()
-	bridge.ServeHTTP(response, command)
-	if response.Code != http.StatusOK || calls.Load() != 2 {
-		t.Fatalf("Infisical proxy = %d %s, calls=%d", response.Code, response.Body, calls.Load())
-	}
+
 }
 
 func TestClientRejectsUntrustedCertificateAndOversizedResponse(t *testing.T) {
@@ -94,14 +89,11 @@ func TestClientRejectsUntrustedCertificateAndOversizedResponse(t *testing.T) {
 	}
 }
 
-func TestClusterProxyRejectsHostAdministrativeOperations(t *testing.T) {
+func TestClusterProxyHasNoSecretCommandRoute(t *testing.T) {
 	c := &Client{}
-	for _, operation := range []string{"membership.add", "membership.delete", "project.rename", "secret.update", "secret.delete", "role.list"} {
-		r := httptest.NewRequest("POST", "/v1/host/infisical/commands", strings.NewReader(`{"operation":"`+operation+`"}`))
-		w := httptest.NewRecorder()
-		c.ServeHTTP(w, r)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("%s returned %d", operation, w.Code)
-		}
+	response := httptest.NewRecorder()
+	c.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/host/infisical/commands", strings.NewReader(`{}`)))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("removed route returned %d", response.Code)
 	}
 }

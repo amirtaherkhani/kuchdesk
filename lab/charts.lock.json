@@ -1,0 +1,58 @@
+{
+  "nats": {
+    "version": "2.15.1",
+    "appVersion": "2.15.1",
+    "digest": "b209c62784b1b24c714d5ff6503b4c7dd948ec187d4222beee16b579f1258cc1",
+    "urls": [
+      "https://github.com/nats-io/k8s/releases/download/nats-2.15.1/nats-2.15.1.tgz"
+    ]
+  },
+  "cert-manager": {
+    "version": "v1.21.2",
+    "appVersion": "v1.21.2",
+    "digest": "73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a",
+    "urls": [
+      "https://charts.jetstack.io/charts/cert-manager-v1.21.2.tgz"
+    ]
+  },
+  "alloy": {
+    "version": "1.13.1",
+    "appVersion": "v1.20.1",
+    "digest": "6c2b7df23e39438bb11f1e1fcf19eb9eb7c8bfeab7d49b7c975b6212abd0f99a",
+    "urls": [
+      "https://github.com/grafana/helm-charts/releases/download/alloy-1.13.1/alloy-1.13.1.tgz"
+    ]
+  },
+  "tempo": {
+    "version": "1.24.4",
+    "appVersion": "2.9.0",
+    "digest": "f1f6e318d5bca3b5097cb676077796cdf8135beb2c1f71c4d14614ccf9b0081b",
+    "urls": [
+      "https://github.com/grafana/helm-charts/releases/download/tempo-1.24.4/tempo-1.24.4.tgz"
+    ]
+  },
+  "loki": {
+    "version": "7.0.0",
+    "appVersion": "3.6.7",
+    "digest": "5eaa28e3535069de2a7ac1f7087ff558e5b4b4a24f0e158072a97e2391132f81",
+    "urls": [
+      "https://github.com/grafana/helm-charts/releases/download/helm-loki-7.0.0/loki-7.0.0.tgz"
+    ]
+  },
+  "k6-operator": {
+    "version": "4.5.0",
+    "appVersion": "1.5.0",
+    "digest": "89388ea2503d381b2e03063e6118d73230f10f48ef6c0b40771e38363d5ebac4",
+    "urls": [
+      "https://github.com/grafana/helm-charts/releases/download/helm-k6-operator-4.5.0/k6-operator-4.5.0.tgz"
+    ]
+  },
+  "kube-prometheus-stack": {
+    "version": "87.15.1",
+    "appVersion": "v0.92.1",
+    "digest": "4334ab0443245c748d73be7d84ce447bb7f3715c63e08fecf05eca66eb9f567b",
+    "urls": [
+      "https://github.com/prometheus-community/helm-charts/releases/download/kube-prometheus-stack-87.15.1/kube-prometheus-stack-87.15.1.tgz"
+    ]
+  }
+}

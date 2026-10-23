@@ -29,4 +29,3 @@ components:
       dashboards: []
       metrics: []
       logs: []
-    secretRefs: []

@@ -1,49 +1,24 @@
 replicas: 1
-
 image:
   registry: docker.io
   repository: grafana/grafana-enterprise
   tag: "13.1.0"
   pullPolicy: IfNotPresent
-
-infisical:
-  authMethod: kubernetesAuth # Approved homelab v1beta1 writer; see migration completion notes.
-  kubernetesAuth:
-    identityId: d05fbb07-7b0c-402a-888d-980b9ac06cde # Existing public identity UUID, not a credential.
-    serviceAccountRef:
-      name: kubedesk-infisical-reader
-      namespace: platform-secrets
-    serviceAccountTokenAudiences: [] # API-server default audience.
-  projectSlug: home-lab-nb0-k # Kubedesk Platform; retain until coordinated slug migration
-  envSlug: dev # Matches the verified live selector; explicit deployment overrides still win.
-  hostAPI: http://infisical-backend.platform-secrets.svc:8080/api
-  credentialsSecretName: infisical-universal-auth
-  credentialsSecretNamespace: platform-secrets
-  secretsPath: /apps/observability/grafana
-
-envFromSecret: grafana-admin
-
-admin:
-  existingSecret: grafana-admin
-  userKey: GRAFANA_ADMIN_USER
-  passwordKey: GRAFANA_ADMIN_PASSWORD
+# Set adminUser/adminPassword only in the ignored values.local.yaml overlay.
+# The chart creates its own Secret directly from those values.
 
 # The PVC is ReadWriteOnce, so replacement pods must not overlap.
 deploymentStrategy:
   type: Recreate
-
 revisionHistoryLimit: 3
 enableServiceLinks: false
-
 testFramework:
   enabled: false
-
 service:
   enabled: true
   type: ClusterIP
   port: 80
   targetPort: 3000
-
 # Enable the renderer used by Grafana panel/image export and k6 evidence.
 # Keep the image version pinned so renderer behavior is reproducible.
 imageRenderer:
@@ -65,32 +40,30 @@ imageRenderer:
         podSelector:
           matchLabels:
             app.kubernetes.io/name: prometheus
-
 serviceMonitor:
   enabled: true
   path: /metrics
   interval: 30s
   labels:
     release: monitoring
-
 ingress:
   enabled: true
   ingressClassName: traefik
   path: /
   pathType: Prefix
-  hosts: [] # Set by the generated site overlay.
-  tls: []
-
+  hosts: [grafana.local.dev]
+  tls:
+    - secretName: kubedesk-local-tls
+      hosts: [grafana.local.dev]
 persistence:
   enabled: true
   type: pvc
-  storageClassName: standard
+  storageClassName: local-path
   accessModes:
     - ReadWriteOnce
   size: 10Gi
   finalizers:
     - kubernetes.io/pvc-protection
-
 initChownData:
   enabled: true
   # Use the same pinned image as the main Grafana workload.
@@ -106,7 +79,6 @@ initChownData:
     limits:
       cpu: 100m
       memory: 64Mi
-
 resources:
   requests:
     cpu: 100m
@@ -114,7 +86,6 @@ resources:
   limits:
     cpu: "1"
     memory: 1Gi
-
 grafana.ini:
   paths:
     data: /var/lib/grafana/
@@ -128,7 +99,8 @@ grafana.ini:
   log:
     mode: console
   server:
-    # domain and root_url are set by the generated site overlay.
+    domain: grafana.local.dev
+    root_url: https://grafana.local.dev
   security:
     cookie_secure: true
     cookie_samesite: lax
@@ -138,8 +110,8 @@ grafana.ini:
     default_theme: dark
     viewers_can_edit: false
   auth.anonymous:
-    # Approved shared Editor access on the existing homelab ingress.
-    enabled: true
+    # Fresh local ingress requires authentication.
+    enabled: false
     org_name: Main Org.
     org_role: Editor
   unified_alerting:
@@ -150,7 +122,6 @@ grafana.ini:
     preinstall_auto_update: false
   live:
     max_connections: 100
-
 datasources:
   datasources.yaml:
     apiVersion: 1
@@ -178,7 +149,6 @@ datasources:
           exemplarTraceIdDestinations:
             - datasourceUid: tempo
               name: traceID
-
       - name: Loki
         uid: loki
         type: loki
@@ -188,10 +158,9 @@ datasources:
         jsonData:
           derivedFields:
             - name: traceId
-              matcherRegex: '(?:trace_id|traceId|traceID)[=:\" ]+([0-9a-fA-F]{16,32})'
+              matcherRegex: '(?:trace_id|traceId|traceID|traceid)[=:\" ]+([0-9a-fA-F]{16,32})'
               datasourceUid: tempo
               url: '$${__value.raw}'
-
       - name: Tempo
         uid: tempo
         type: tempo
@@ -216,7 +185,6 @@ datasources:
                 value: namespace
               - key: k8s.pod.name
                 value: pod
-
 sidecar:
   image:
     registry: docker.io

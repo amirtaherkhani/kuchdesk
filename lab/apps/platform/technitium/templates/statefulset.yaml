@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: technitium
+spec:
+  serviceName: technitium
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: technitium
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: technitium
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: technitium
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DNS_SERVER_DOMAIN
+              value: {{ .Values.domain | quote }}
+            - name: DNS_SERVER_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: technitium-admin
+                  key: DNS_SERVER_ADMIN_PASSWORD
+          ports:
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+            - name: admin
+              containerPort: 5380
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: dns-tcp
+          livenessProbe:
+            tcpSocket:
+              port: dns-tcp
+          volumeMounts:
+            - name: data
+              mountPath: /etc/dns
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.storageSize | quote }}

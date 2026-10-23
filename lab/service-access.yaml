@@ -1,0 +1,284 @@
+version: 1
+publicationRanges:
+  TCP:
+    - 20000
+    - 20099
+  UDP:
+    - 20000
+    - 20099
+# Non-Kubernetes publications reserve ports here without inventing a Service or
+# Helm owner. They use the same native Lima forwarding range.
+reservations:
+  finance-container:
+    owner: finance-container-development/app
+    profile: kuchdesk-fresh
+    namespace: default
+    protocol: TCP
+    publishedPort: 20008
+    hostIP: 127.0.0.1
+    backendPort: 3000
+services:
+  nats:
+    id: nats
+    enabled: true
+    applyReady: true
+    owner: platform-storage/nats
+    namespace: platform-storage
+    backendService: nats
+    backendPort: 4222
+    publishedService: nats-public
+    publishedPort: 20000
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: ""
+    uiPort: 0
+    uiEnabled: false
+    modes:
+      - pod
+      - mac
+      - container
+  maildev-smtp:
+    id: maildev-smtp
+    enabled: true
+    applyReady: true
+    owner: vero/maildev
+    namespace: vero
+    backendService: finance-maildev
+    backendPort: 1025
+    publishedService: finance-maildev-smtp
+    publishedPort: 20001
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: maildev.local.dev
+    uiPort: 1080
+    uiEnabled: true
+    modes:
+      - pod
+      - mac
+      - container
+      - web
+  maildev-api:
+    id: maildev-api
+    enabled: true
+    applyReady: false
+    owner: kube-system/kuchdesk-ui
+    namespace: kube-system
+    backendService: kuchdesk-maildev-api
+    backendPort: 20002
+    publishedService: kuchdesk-maildev-api
+    publishedPort: 20002
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: maildev.local.dev
+    uiPort: 1080
+    uiEnabled: false
+    modes:
+      - pod
+      - mac
+      - container
+  grafana:
+    id: grafana
+    enabled: true
+    applyReady: false
+    owner: observability/grafana
+    namespace: observability
+    backendService: grafana
+    backendPort: 80
+    publishedService: ""
+    publishedPort: 0
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: grafana.local.dev
+    uiPort: 80
+    uiEnabled: true
+    modes:
+      - pod
+      - web
+  technitium:
+    id: technitium
+    enabled: true
+    applyReady: false
+    owner: technitium/technitium
+    namespace: technitium
+    backendService: technitium
+    backendPort: 5380
+    publishedService: ""
+    publishedPort: 0
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: technitium.local.dev
+    uiPort: 5380
+    uiEnabled: true
+    modes:
+      - pod
+      - web
+  prometheus:
+    id: prometheus
+    enabled: true
+    applyReady: false
+    owner: observability/monitoring
+    namespace: observability
+    backendService: monitoring-kube-prometheus-prometheus
+    backendPort: 9090
+    publishedService: ""
+    publishedPort: 0
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: prometheus.local.dev
+    uiPort: 9090
+    uiEnabled: true
+    modes:
+      - pod
+      - web
+  alertmanager:
+    id: alertmanager
+    enabled: true
+    applyReady: false
+    owner: observability/monitoring
+    namespace: observability
+    backendService: monitoring-kube-prometheus-alertmanager
+    backendPort: 9093
+    publishedService: ""
+    publishedPort: 0
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: alertmanager.local.dev
+    uiPort: 9093
+    uiEnabled: true
+    modes:
+      - pod
+      - web
+  alloy:
+    id: alloy
+    enabled: true
+    applyReady: false
+    owner: observability/alloy
+    namespace: observability
+    backendService: alloy
+    backendPort: 12345
+    publishedService: ""
+    publishedPort: 0
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: alloy.local.dev
+    uiPort: 12345
+    uiEnabled: true
+    modes:
+      - pod
+      - web
+  alloy-otlp-http:
+    id: alloy-otlp-http
+    enabled: true
+    applyReady: true
+    owner: observability/alloy-publication
+    backendOwner: observability/alloy
+    namespace: observability
+    backendService: alloy
+    backendPort: 4318
+    publishedService: alloy-otlp
+    publishedPort: 20006
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: ""
+    uiPort: 0
+    uiEnabled: false
+    modes:
+      - pod
+      - mac
+      - container
+  alloy-otlp-grpc:
+    id: alloy-otlp-grpc
+    enabled: true
+    applyReady: true
+    owner: observability/alloy-publication
+    backendOwner: observability/alloy
+    namespace: observability
+    backendService: alloy
+    backendPort: 4317
+    publishedService: alloy-otlp
+    publishedPort: 20007
+    protocol: TCP
+    verificationStatus: pending-runtime
+    uiDomain: ""
+    uiPort: 0
+    uiEnabled: false
+    modes:
+      - pod
+      - mac
+      - container
+  rabbitmq:
+    id: rabbitmq
+    enabled: true
+    applyReady: true
+    owner: platform-storage/rabbitmq
+    namespace: platform-storage
+    backendService: rabbitmq
+    backendPort: 5672
+    publishedService: rabbitmq-public
+    publishedPort: 20005
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: rabbitmq.local.dev
+    uiPort: 15672
+    uiEnabled: true
+    modes:
+      - pod
+      - mac
+      - container
+      - web
+  traefik:
+    id: traefik
+    enabled: true
+    applyReady: false
+    owner: kube-system/traefik
+    namespace: kube-system
+    backendService: traefik
+    backendPort: 443
+    publishedService: ""
+    publishedPort: 0
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: traefik.local.dev
+    uiPort: 443
+    uiEnabled: true
+    modes:
+      - pod
+      - web
+  postgresql:
+    id: postgresql
+    enabled: true
+    applyReady: true
+    owner: platform-storage/postgresql
+    namespace: platform-storage
+    backendService: postgresql
+    backendPort: 5432
+    publishedService: postgresql-public
+    publishedPort: 20003
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: ""
+    uiPort: 0
+    uiEnabled: false
+    modes:
+      - pod
+      - mac
+      - container
+  redis:
+    id: redis
+    enabled: true
+    applyReady: true
+    owner: platform-storage/redis
+    namespace: platform-storage
+    backendService: redis
+    backendPort: 6379
+    publishedService: redis-public
+    publishedPort: 20004
+    protocol: TCP
+    verificationStatus: runtime-verified
+    uiDomain: ""
+    uiPort: 0
+    uiEnabled: false
+    modes:
+      - pod
+      - mac
+      - container

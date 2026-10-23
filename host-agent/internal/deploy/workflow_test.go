@@ -20,7 +20,7 @@ type fakePreflight struct {
 
 func (f *fakePreflight) Run(_ context.Context, config doctor.Config) (doctor.Report, error) {
 	f.calls++
-	if config.Domain != "infisical.local.dev" || config.RegistryURL != "http://127.0.0.1:5001" {
+	if config.Domain != "grafana.local.dev" || config.RegistryURL != "http://127.0.0.1:5001" {
 		return doctor.Report{}, errors.New("bad preflight request")
 	}
 	if f.err != nil {
@@ -46,6 +46,15 @@ type fakeRunner struct {
 }
 
 func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...string) error {
+	if name == "colima" && len(args) >= 8 && args[2] == "ssh" {
+		name, args = "ctr", args[8:]
+	}
+	if name == "colima" {
+		if len(args) < 7 || strings.Join(args[:6], " ") != "--profile kuchdesk-fresh nerdctl -- --namespace k8s.io" {
+			return errors.New("wrong containerd scope")
+		}
+		name, args = "nerdctl", args[6:]
+	}
 	f.calls = append(f.calls, call{name: name, args: args})
 	if f.failAt != "" && strings.HasPrefix(name+" "+strings.Join(args, " "), f.failAt) {
 		return errors.New("command failed")
@@ -54,85 +63,38 @@ func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...strin
 }
 
 func (f *fakeRunner) Output(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
+	if name == "colima" && len(args) >= 8 && args[2] == "ssh" {
+		name, args = "ctr", args[8:]
+	}
+	if name == "colima" {
+		if len(args) < 7 || strings.Join(args[:6], " ") != "--profile kuchdesk-fresh nerdctl -- --namespace k8s.io" {
+			return nil, errors.New("wrong containerd scope")
+		}
+		name, args = "nerdctl", args[6:]
+	}
 	f.calls = append(f.calls, call{name: name, args: args})
+	if f.failAt != "" && strings.HasPrefix(name+" "+strings.Join(args, " "), f.failAt) {
+		return nil, errors.New("command failed")
+	}
 	switch name + " " + args[0] {
+	case "helm version":
+		return []byte("v4.3.1"), nil
 	case "git rev-parse":
-		return []byte("123456789abc\n"), nil
+		return []byte("123456789abc" + strings.Repeat("0", 28) + "\n"), nil
 	case "git status":
 		return []byte{}, nil
-	case "docker image":
-		if args[1] == "ls" {
-			return nil, nil
-		}
-		if len(args) == 3 {
-			return nil, errors.New("image absent")
-		}
+	case "git ls-files":
+		return nil, nil
+	case "nerdctl images":
+		return nil, nil
+	case "nerdctl image":
 		return []byte(f.digests), nil
-	case "crane digest":
-		return []byte(f.digests), nil
+	case "ctr images":
+		return []byte("localhost:5001/kuchdesk-agent:git-123456789abc"), nil
 	case "kubectl --context":
 		return []byte(f.nodes), nil
 	default:
 		return nil, errors.New("unexpected output call")
-	}
-}
-
-func TestHostRegistryPushAndKindPrepull(t *testing.T) {
-	spec := fixture(t)
-	spec.PushMode = "host-crane"
-	spec.HostPushRepo = "127.0.0.1:5001/kuchdesk-agent"
-	spec.KindPrepull = true
-	digest := "sha256:" + strings.Repeat("b", 64)
-	runner := &fakeRunner{digests: digest + "\n", nodes: `{"items":[{"metadata":{"name":"desktop-control-plane"}}]}`}
-	result, err := (Workflow{Runner: runner, Preflight: &fakePreflight{}}).Apply(context.Background(), spec)
-	if err != nil || result.Digest != digest {
-		t.Fatalf("host push failed: %+v %v", result, err)
-	}
-	var save, push, staged, prepull, upgrade bool
-	for _, call := range runner.calls {
-		joined := call.name + " " + strings.Join(call.args, " ")
-		if strings.HasPrefix(joined, "docker save ") {
-			save = true
-		}
-		if strings.HasPrefix(joined, "crane push ") {
-			push = true
-		}
-		if strings.Contains(joined, "docker push ") {
-			t.Fatal("used Docker daemon to push through host-only port-forward")
-		}
-		if strings.HasPrefix(joined, "docker exec desktop-control-plane ctr -n k8s.io images pull --plain-http ") && strings.Contains(joined, spec.ImageRepository+":"+spec.ImageTag+"@"+digest) {
-			staged = true
-		}
-		if strings.HasPrefix(joined, "docker exec desktop-control-plane crictl pull ") && strings.Contains(joined, spec.ImageRepository+":"+spec.ImageTag+"@"+digest) {
-			prepull = true
-		}
-		if strings.HasPrefix(joined, "helm upgrade ") {
-			upgrade = true
-			if !strings.Contains(joined, "image.pullPolicy=Never") {
-				t.Fatal("pre-pulled image may be fetched again by kubelet")
-			}
-		}
-	}
-	if !save || !push || !staged || !prepull || !upgrade {
-		t.Fatalf("missing workflow phase: save=%t push=%t staged=%t prepull=%t upgrade=%t", save, push, staged, prepull, upgrade)
-	}
-}
-
-func TestPrepullFailureStopsBeforeHelm(t *testing.T) {
-	spec := fixture(t)
-	spec.PushMode = "host-crane"
-	spec.HostPushRepo = "127.0.0.1:5001/kuchdesk-agent"
-	spec.KindPrepull = true
-	for _, failedStep := range []string{"docker exec desktop-control-plane ctr", "docker exec desktop-control-plane crictl"} {
-		runner := &fakeRunner{digests: "sha256:" + strings.Repeat("b", 64), nodes: `{"items":[{"metadata":{"name":"desktop-control-plane"}}]}`, failAt: failedStep}
-		if _, err := (Workflow{Runner: runner, Preflight: &fakePreflight{}}).Apply(context.Background(), spec); err == nil {
-			t.Fatalf("accepted failed node pre-pull: %s", failedStep)
-		}
-		for _, call := range runner.calls {
-			if call.name == "helm" && call.args[0] == "upgrade" {
-				t.Fatal("deployed without node image")
-			}
-		}
 	}
 }
 
@@ -149,13 +111,13 @@ func fixture(t *testing.T) Spec {
 			t.Fatal(err)
 		}
 	}
-	return Spec{SourceDir: source, Dockerfile: filepath.Join(source, "Dockerfile"), ChartDir: chart, ValuesFiles: []string{filepath.Join(chart, "values.yaml")}, ImageRepository: "localhost:5001/kuchdesk-agent", ImageTag: "git-123456789abc", KubeContext: "docker-desktop", Namespace: "development-tools", Release: "kuchdesk-agent", Deployment: "kuchdesk-agent", Test: "go", PreflightDomain: "infisical.local.dev", PreflightRegistryURL: "http://127.0.0.1:5001"}
+	return Spec{SourceDir: source, Dockerfile: filepath.Join(source, "Dockerfile"), ChartDir: chart, ValuesFiles: []string{filepath.Join(chart, "values.yaml")}, ImageRepository: "localhost:5001/kuchdesk-agent", ImageTag: "git-123456789abc", KubeContext: "colima-kuchdesk-fresh", Namespace: "development-tools", Release: "kuchdesk-agent", Deployment: "kuchdesk-agent", Test: "go", Platform: "linux/arm64", PreflightDomain: "grafana.local.dev", PreflightRegistryURL: "http://127.0.0.1:5001"}
 }
 
 func TestApplyPinsDigestAndValidatesRollout(t *testing.T) {
 	spec := fixture(t)
 	digest := "sha256:" + strings.Repeat("a", 64)
-	runner := &fakeRunner{digests: `["localhost:5001/kuchdesk-agent@` + digest + `"]`}
+	runner := &fakeRunner{digests: nativeFixture(digest, "arm64")}
 	result, err := (Workflow{Runner: runner, Preflight: &fakePreflight{}}).Apply(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -166,28 +128,68 @@ func TestApplyPinsDigestAndValidatesRollout(t *testing.T) {
 	var steps []string
 	for _, call := range runner.calls {
 		steps = append(steps, call.name+" "+call.args[0])
+		if call.name == "ctr" && len(call.args) > 1 && call.args[1] == "tag" {
+			if got := call.args[len(call.args)-1]; got != spec.ImageRepository+"@"+digest {
+				t.Fatalf("wrong local digest reference: %s", got)
+			}
+		}
 		if call.name == "helm" && (call.args[0] == "template" || call.args[0] == "upgrade") {
 			joined := strings.Join(call.args, " ")
-			if !strings.Contains(joined, "image.digest="+digest) || !strings.Contains(joined, "--kube-context docker-desktop") {
+			if !strings.Contains(joined, "image.digest="+digest) || !strings.Contains(joined, "--kube-context colima-kuchdesk-fresh") {
 				t.Fatalf("Helm call lost digest or explicit context: %s", joined)
 			}
 		}
 	}
-	want := []string{"git rev-parse", "git status", "helm lint", "go test", "docker image", "docker image", "docker build", "docker push", "docker image", "helm template", "helm upgrade", "kubectl --context"}
+	want := []string{"git rev-parse", "git status", "git ls-files", "helm version", "go test", "nerdctl images", "nerdctl build", "nerdctl image", "ctr images", "ctr images", "git rev-parse", "git status", "git ls-files", "helm lint", "helm template", "helm upgrade", "kubectl --context"}
 	if !reflect.DeepEqual(steps, want) {
 		t.Fatalf("unexpected step order: got %v want %v", steps, want)
 	}
 }
 
-func TestPushFailureNeverCallsHelmUpgrade(t *testing.T) {
+func TestAgentDeployPersistsImageAndConsumesOnlyCanonicalYAML(t *testing.T) {
 	spec := fixture(t)
-	runner := &fakeRunner{failAt: "docker push"}
-	if _, err := (Workflow{Runner: runner, Preflight: &fakePreflight{}}).Apply(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "docker push failed") {
-		t.Fatalf("expected push failure, got %v", err)
+	spec.ChartDir = filepath.Join(spec.SourceDir, "kuchdesk-agent/chart")
+	if err := os.MkdirAll(spec.ChartDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Chart.yaml", "values.yaml"} {
+		if err := os.WriteFile(filepath.Join(spec.ChartDir, name), []byte("synthetic: true\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local := filepath.Join(spec.ChartDir, "values.local.yaml")
+	if err := os.WriteFile(local, []byte("image:\n  repository: ''\n  tag: ''\n  digest: ''\nunrelated: keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec.ValuesFiles = []string{filepath.Join(spec.ChartDir, "values.yaml"), local}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	runner := &fakeRunner{digests: nativeFixture(digest, "arm64")}
+	if _, err := (Workflow{Runner: runner, Preflight: &fakePreflight{}}).Apply(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(local)
+	if err != nil || !strings.Contains(string(data), digest) || !strings.Contains(string(data), "unrelated: keep") {
+		t.Fatal("canonical image identity not persisted safely")
 	}
 	for _, call := range runner.calls {
 		if call.name == "helm" && call.args[0] == "upgrade" {
-			t.Fatal("Helm upgraded after push failure")
+			args := strings.Join(call.args, " ")
+			if strings.Contains(args, "--set") || !strings.Contains(args, local) || !strings.Contains(args, "--rollback-on-failure") {
+				t.Fatal("Agent Helm bypassed canonical YAML")
+			}
+		}
+	}
+}
+
+func TestBuildFailureNeverCallsHelmUpgrade(t *testing.T) {
+	spec := fixture(t)
+	runner := &fakeRunner{failAt: "nerdctl build"}
+	if _, err := (Workflow{Runner: runner, Preflight: &fakePreflight{}}).Apply(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "nerdctl build failed") {
+		t.Fatalf("expected build failure, got %v", err)
+	}
+	for _, call := range runner.calls {
+		if call.name == "helm" && call.args[0] == "upgrade" {
+			t.Fatal("Helm upgraded after build failure")
 		}
 	}
 }
@@ -230,13 +232,7 @@ func TestPreflightConfigurationRequired(t *testing.T) {
 	if _, err := spec.Plan(); err == nil {
 		t.Fatal("plan accepted external registry probe")
 	}
-	spec = fixture(t)
-	spec.PushMode = "host-crane"
-	spec.HostPushRepo = "127.0.0.1:5001/kuchdesk-agent"
-	spec.PreflightRegistryURL = "http://127.0.0.1:9000"
-	if _, err := spec.Plan(); err == nil {
-		t.Fatal("plan accepted unrelated registry port")
-	}
+
 }
 
 func TestSpecRejectsUnsafeOrAmbiguousInputs(t *testing.T) {

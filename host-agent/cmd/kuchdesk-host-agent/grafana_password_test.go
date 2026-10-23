@@ -3,13 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -32,7 +30,11 @@ func TestGrafanaCommandHelpDoesNotRequireClusterOrTerminal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("help failed: %v: %s", err, output)
 		}
-		if !strings.Contains(string(output), "bootstrap") || !strings.Contains(string(output), "--kube-context") {
+		option := "--values-root"
+		if command == "grafana-admin-password-reset" {
+			option = "--kube-context"
+		}
+		if !strings.Contains(string(output), "bootstrap") || !strings.Contains(string(output), option) {
 			t.Fatalf("help does not explain bootstrap source and explicit cluster: %s", output)
 		}
 	}
@@ -50,14 +52,14 @@ func (t *grafanaTestTerminal) Close() error                { t.closed = true; re
 func TestGrafanaRevealRequiresTypedConsentAndClearsPassword(t *testing.T) {
 	terminal := &grafanaTestTerminal{Reader: strings.NewReader("REVEAL GRAFANA BOOTSTRAP PASSWORD\n")}
 	password := []byte("Dummy-password-only!")
-	err := runGrafanaAdminPassword(context.Background(), []string{"--kube-context", "dummy-context"}, io.Discard,
+	err := runGrafanaAdminPassword(context.Background(), []string{"--values-root", "/dummy-root"}, io.Discard,
 		func() (io.ReadWriteCloser, error) { return terminal, nil },
-		func(ctx context.Context, cluster string) ([]byte, error) {
+		func(ctx context.Context, root string) ([]byte, error) {
 			if !strings.Contains(terminal.output.String(), "may not authenticate") {
 				t.Fatal("missing bootstrap warning before read")
 			}
-			if cluster != "dummy-context" {
-				t.Fatal("wrong cluster")
+			if root != "/dummy-root" {
+				t.Fatal("wrong source root")
 			}
 			if _, ok := ctx.Deadline(); !ok {
 				t.Fatal("unbounded password fetch")
@@ -75,13 +77,13 @@ func TestGrafanaRevealRequiresTypedConsentAndClearsPassword(t *testing.T) {
 	}
 }
 
-func TestGrafanaRevealCancelsBeforeSecretRead(t *testing.T) {
+func TestGrafanaRevealCancelsBeforeLocalValuesRead(t *testing.T) {
 	for _, input := range []string{"", "cancel\n", "REVEAL GRAFANA BOOTSTRAP PASSWORD", strings.Repeat("x", 300) + "\n"} {
 		terminal := &grafanaTestTerminal{Reader: strings.NewReader(input)}
-		err := runGrafanaAdminPassword(context.Background(), []string{"--kube-context", "dummy"}, io.Discard,
+		err := runGrafanaAdminPassword(context.Background(), []string{"--values-root", "/dummy-root"}, io.Discard,
 			func() (io.ReadWriteCloser, error) { return terminal, nil },
 			func(context.Context, string) ([]byte, error) {
-				t.Fatal("cancelled reveal fetched secret")
+				t.Fatal("cancelled reveal read private values")
 				return nil, nil
 			})
 		if err == nil || !terminal.closed {
@@ -91,7 +93,7 @@ func TestGrafanaRevealCancelsBeforeSecretRead(t *testing.T) {
 }
 
 func TestGrafanaRevealRejectsInvalidArgsBeforeTerminalAccess(t *testing.T) {
-	for _, args := range [][]string{nil, {"--kube-context", " "}, {"--kube-context", "bad\ncontext"}, {"--password", "Dummy-password-only!"}, {"--kube-context", "dummy", "Dummy-password-only!"}, {"--secret", "arbitrary"}} {
+	for _, args := range [][]string{nil, {"--values-root", " "}, {"--values-root", "bad\nroot"}, {"--password", "Dummy-password-only!"}, {"--values-root", "/dummy-root", "Dummy-password-only!"}, {"--secret", "arbitrary"}} {
 		err := runGrafanaAdminPassword(context.Background(), args, io.Discard,
 			func() (io.ReadWriteCloser, error) { t.Fatal("invalid args opened terminal"); return nil, nil },
 			func(context.Context, string) ([]byte, error) { t.Fatal("invalid args fetched secret"); return nil, nil })
@@ -104,7 +106,7 @@ func TestGrafanaRevealRejectsInvalidArgsBeforeTerminalAccess(t *testing.T) {
 func TestGrafanaRevealSanitizesDependencyFailures(t *testing.T) {
 	for _, failOpen := range []bool{true, false} {
 		terminal := &grafanaTestTerminal{Reader: strings.NewReader("REVEAL GRAFANA BOOTSTRAP PASSWORD\n")}
-		err := runGrafanaAdminPassword(context.Background(), []string{"--kube-context", "dummy"}, io.Discard,
+		err := runGrafanaAdminPassword(context.Background(), []string{"--values-root", "/dummy-root"}, io.Discard,
 			func() (io.ReadWriteCloser, error) {
 				if failOpen {
 					return nil, errors.New("Dummy-password-only!")
@@ -123,7 +125,7 @@ func TestGrafanaRevealSanitizesDependencyFailures(t *testing.T) {
 	}
 }
 
-func TestGrafanaCLIRefusesPipesBeforeKubectl(t *testing.T) {
+func TestGrafanaCLIRefusesPipesBeforeCredentialAccess(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "called")
 	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 99\n"), 0700); err != nil {
@@ -131,7 +133,11 @@ func TestGrafanaCLIRefusesPipesBeforeKubectl(t *testing.T) {
 	}
 	for _, command := range []string{"grafana-admin-password", "grafana-admin-password-reset"} {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestGrafanaCLIProcess$")
-		cmd.Env = append(os.Environ(), "PATH="+dir, "KUCHDESK_TEST_GRAFANA_CLI=1", "KUCHDESK_TEST_GRAFANA_ARGS="+command+"\n--kube-context\ndummy")
+		args := command + "\n--kube-context\ncolima-dummy"
+		if command == "grafana-admin-password" {
+			args = command + "\n--values-root\n/dummy-root"
+		}
+		cmd.Env = append(os.Environ(), "PATH="+dir, "KUCHDESK_TEST_GRAFANA_CLI=1", "KUCHDESK_TEST_GRAFANA_ARGS="+args)
 		output, err := cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(output), "terminal") {
 			t.Fatalf("noninteractive invocation: %v %s", err, output)
@@ -142,60 +148,34 @@ func TestGrafanaCLIRefusesPipesBeforeKubectl(t *testing.T) {
 	}
 }
 
-func TestGrafanaBootstrapReadUsesFixedSecretAndExistingAuthorization(t *testing.T) {
-	for _, mode := range []string{"allow", "deny", "get-error", "invalid", "empty", "control", "oversize"} {
-		t.Run(mode, func(t *testing.T) {
-			dir := t.TempDir()
-			capture := filepath.Join(dir, "calls")
-			encoded := base64.StdEncoding.EncodeToString([]byte("Dummy-password-only!"))
-			if mode == "invalid" {
-				encoded = "not-base64!"
-			}
-			if mode == "empty" {
-				encoded = ""
-			}
-			if mode == "control" {
-				encoded = base64.StdEncoding.EncodeToString([]byte("bad\x1b[31m"))
-			}
-			if mode == "oversize" {
-				encoded = strings.Repeat("A", 9000)
-			}
-			script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + capture + "'\ncase \"$*\" in\n*'auth can-i'*) "
-			if mode == "deny" {
-				script += "printf 'no\\nDummy-password-only!' >&2; exit 1"
-			} else {
-				script += "printf 'yes\\n'"
-			}
-			script += ";;\n*) "
-			if mode == "get-error" {
-				script += "printf 'Dummy-password-only!' >&2; exit 1"
-			} else {
-				script += "printf '%s' '" + encoded + "'"
-			}
-			script += ";;\nesac\n"
-			if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0700); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", dir)
-			password, err := readGrafanaBootstrapPassword(context.Background(), "dummy-context")
-			calls, readErr := os.ReadFile(capture)
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			want := []string{"--context dummy-context --request-timeout=10s -n observability auth can-i get secret/grafana-admin"}
-			if mode != "deny" {
-				want = append(want, "--context dummy-context --request-timeout=10s -n observability get secret grafana-admin -o jsonpath={.data.GRAFANA_ADMIN_PASSWORD}")
-			}
-			if !reflect.DeepEqual(strings.Split(strings.TrimSpace(string(calls)), "\n"), want) {
-				t.Fatal("wrong resource or unauthorized fetch")
-			}
-			if mode == "allow" {
-				if err != nil || string(password) != "Dummy-password-only!" {
-					t.Fatal("bootstrap read failed")
-				}
-			} else if err == nil || len(password) != 0 || strings.Contains(err.Error(), "Dummy-password-only!") || strings.Contains(err.Error(), encoded) && encoded != "" {
-				t.Fatal("bad or unauthorized secret returned, or leaked error")
-			}
-		})
+func TestGrafanaBootstrapReadUsesPrivateLocalYAML(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "lab/apps/observability/grafana/values.local.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("adminPassword: Dummy-password-only!\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	password, err := readGrafanaBootstrapPassword(context.Background(), root)
+	if err != nil || string(password) != "Dummy-password-only!" {
+		t.Fatal("private YAML bootstrap read failed")
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	password, err = readGrafanaBootstrapPassword(context.Background(), root)
+	if err == nil || len(password) != 0 {
+		t.Fatal("insecure private YAML was read")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("adminPassword: bad\x1b[31m\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	password, err = readGrafanaBootstrapPassword(context.Background(), root)
+	if err == nil || len(password) != 0 {
+		t.Fatal("unsafe bootstrap value was read")
 	}
 }

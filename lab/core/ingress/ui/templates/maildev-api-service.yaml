@@ -1,0 +1,22 @@
+{{- if and .Values.maildevAPI.enabled (index .Values.services "maildev-api").enabled }}
+{{- $endpoint := index .Values.services "maildev-api" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $endpoint.publishedService }}
+  namespace: {{ $endpoint.namespace }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  allocateLoadBalancerNodePorts: false
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.maildevAPI.sourceRanges | nindent 4 }}
+  selector:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik-kube-system
+  ports:
+    - name: maildevapi
+      protocol: TCP
+      port: {{ $endpoint.publishedPort }}
+      targetPort: maildevapi
+{{- end }}

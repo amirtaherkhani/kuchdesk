@@ -1,0 +1,63 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-metrics
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: prom-metrics
+      port: 15692
+      targetPort: 15692
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rabbitmq-native
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: metrics
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  endpoints:
+    - port: prom-metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rabbitmq-prometheus-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.metrics.prometheusNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: {{ .Values.metrics.prometheusName | quote }}
+      ports:
+        - port: 15692
+          protocol: TCP
+{{- end }}

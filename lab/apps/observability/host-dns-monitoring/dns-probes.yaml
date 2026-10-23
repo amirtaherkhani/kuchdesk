@@ -19,11 +19,11 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: Probe
 metadata:
-  name: docker-host-site-dns
+  name: coredns-site-dns
   labels:
     release: monitoring
 spec:
-  jobName: docker-host-site-dns
+  jobName: coredns-site-dns
   interval: 30s
   scrapeTimeout: 10s
   module: dns_site
@@ -32,7 +32,7 @@ spec:
   targets:
     staticConfig:
       static:
-        - host.docker.internal:53
+        - kube-dns.kube-system.svc:53
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: Probe

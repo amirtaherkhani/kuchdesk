@@ -14,8 +14,7 @@ import (
 type siteProfile struct {
 	Domain string `json:"domain"`
 	Hosts  struct {
-		Grafana   string `json:"grafana"`
-		Infisical string `json:"infisical"`
+		Grafana string `json:"grafana"`
 	} `json:"hosts"`
 	TLS struct {
 		SecretName string `json:"secretName,omitempty"`
@@ -34,7 +33,6 @@ type siteProfile struct {
 
 type output struct {
 	resources map[string]any
-	overlays  map[string]any
 	summary   map[string]any
 }
 
@@ -68,16 +66,13 @@ func render(profile siteProfile, domainOverride string) (output, error) {
 	if err := validName(domain, "domain", true); err != nil {
 		return output{}, err
 	}
-	for service, host := range map[string]string{"grafana": profile.Hosts.Grafana, "infisical": profile.Hosts.Infisical} {
+	for service, host := range map[string]string{"grafana": profile.Hosts.Grafana} {
 		if err := validName(host, "hosts."+service, false); err != nil {
 			return output{}, err
 		}
 		if strings.Contains(host, ".") {
 			return output{}, fmt.Errorf("hosts.%s must be one label for wildcard TLS", service)
 		}
-	}
-	if profile.Hosts.Grafana == profile.Hosts.Infisical {
-		return output{}, errors.New("Grafana and Infisical host labels must differ")
 	}
 	issuer := profile.TLS.Issuer
 	if issuer.Type != "private-ca" && issuer.Type != "existing" {
@@ -116,7 +111,6 @@ func render(profile siteProfile, domainOverride string) (output, error) {
 		return output{}, err
 	}
 	grafanaHost := profile.Hosts.Grafana + "." + domain
-	infisicalHost := profile.Hosts.Infisical + "." + domain
 	resources := make(map[string]any)
 	var caSecretName, caNamespace any
 	if issuer.Type == "private-ca" {
@@ -187,21 +181,12 @@ func render(profile siteProfile, domainOverride string) (output, error) {
         fail_if_none_matches_regexp: ['\sIN\sA\s']
 `, grafanaHost)},
 	}
-	overlays := map[string]any{
-		"grafana-values.json": map[string]any{
-			"ingress":     map[string]any{"hosts": []string{grafanaHost}, "tls": []any{map[string]any{"secretName": secretName, "hosts": []string{grafanaHost}}}},
-			"grafana.ini": map[string]any{"server": map[string]any{"domain": grafanaHost, "root_url": "https://" + grafanaHost}},
-		},
-		"infisical-values.json": map[string]any{
-			"ingress": map[string]any{"hostName": infisicalHost, "tls": []any{map[string]any{"secretName": secretName, "hosts": []string{infisicalHost}}}},
-		},
-	}
 	summary := map[string]any{
 		"domain": domain, "secretName": secretName, "certificateNamespaces": namespaces,
 		"caSecretName": caSecretName, "caNamespace": caNamespace,
-		"grafanaUrl": "https://" + grafanaHost, "infisicalUrl": "https://" + infisicalHost,
+		"grafanaUrl": "https://" + grafanaHost,
 	}
-	return output{resources: resources, overlays: overlays, summary: summary}, nil
+	return output{resources: resources, summary: summary}, nil
 }
 
 func writeJSON(path string, value any) error {
@@ -241,8 +226,8 @@ func writeOutput(dir string, result output) error {
 			return err
 		}
 	}
-	for name, value := range result.overlays {
-		if err := writeJSON(filepath.Join(dir, name), value); err != nil {
+	for _, name := range []string{"grafana-values.json"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}

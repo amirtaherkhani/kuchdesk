@@ -1,0 +1,28 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kuchdesk-host-bridge
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/managed-by: kuchdesk
+    app.kubernetes.io/name: host-bridge
+spec:
+  secretName: kuchdesk-host-bridge-tls
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Always
+  dnsNames:
+    - host.lima.internal
+  ipAddresses:
+    - 192.168.64.1
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+  issuerRef:
+    name: local-dev-ca
+    kind: ClusterIssuer
+    group: cert-manager.io

@@ -1,0 +1,21 @@
+{{- if and .Values.maildevAPI.enabled (index .Values.services "maildev-api").enabled }}
+{{- if or (not .Values.maildevAPI.sourceRanges) (not .Values.uiAccess.basicAuthSecret) }}
+{{- fail "protected MailDev API requires local source ranges and BasicAuth" }}
+{{- end }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kuchdesk-maildev-api
+  namespace: vero
+spec:
+  entryPoints: [maildevapi]
+  routes:
+    - kind: Rule
+      match: (Method(`GET`) && (Path(`/healthz`) || Path(`/email`))) || ((Method(`GET`) || Method(`DELETE`)) && PathRegexp(`^/email/[A-Za-z0-9_-]+$`) && !Path(`/email/all`) && !Path(`/email/read-all`))
+      middlewares:
+        - name: kuchdesk-ui-login
+      services:
+        - name: {{ (index .Values.services "maildev-smtp").backendService }}
+          port: {{ (index .Values.services "maildev-smtp").uiPort }}
+{{- end }}

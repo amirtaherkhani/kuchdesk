@@ -1,183 +1,85 @@
-# Observability runtime
+# Fresh Colima/K3s local profile
 
-This is the checked-in deployment profile. [`site.json`](site.json) contains this installation's DNS domain, service host labels, TLS issuer, and certificate namespaces. Edit it or pass another file to `go run ./cmd/render-site --profile path/to/site.json`; no domain is embedded in deployable Ingress, Certificate, TLSStore, or Helm values. The agent code has no site default.
+This directory prepares a new KuchDesk installation. It does not migrate data or credentials from Docker Desktop or kind. Live execution is authorized by the final execution prompt; the final report records actual runtime evidence.
 
-For controlled changes to the local site profile, `render-site config` provides
-`snapshot`, `validate`, `plan`, `dry-run`, `apply`, and `rollback`. Pass absolute
-paths to the current profile and candidate. `plan` lists changed fields and
-returns a `planId`; `apply` requires that exact ID and rejects a profile that
-changed since planning. It saves a private revision backup beside the profile
-before replacing the file atomically. `rollback` requires both the saved
-revision and the current revision as confirmation. A lock prevents concurrent
-applies. The backup and lock files are Git-ignored for the checked-in profile.
+## Inputs
+
+| Service | Direct YAML consumed at installation |
+| --- | --- |
+| Colima/K3s | ignored colima-k3s.local.yaml; tracked colima-k3s.example.yaml documents the schema |
+| K3s Traefik | core/ingress/traefik-k3s.yaml, a HelmChartConfig consumed by the K3s Helm controller |
+| Protected UI routes | core/ingress/ui/values.yaml plus service-access.yaml; existing credential Secret references only |
+| K3s CoreDNS | K3s bundled CoreDNS; the Agent uses the new cluster's kube-system/coredns ConfigMap for explicitly enabled aliases |
+| Technitium | apps/platform/technitium/values.yaml and ignored values.local.yaml |
+| MailDev | apps/platform/maildev/values.yaml |
+| PostgreSQL / Redis / RabbitMQ | apps/platform/SERVICE/values.yaml and ignored auth.local.yaml Secret manifests |
+| NATS JetStream | apps/platform/nats/values.yaml; ignored apps/platform/nats/auth.local.yaml supplies the namespaced Secret |
+| cert-manager | apps/platform/cert-manager/values.yaml |
+| Grafana | apps/observability/grafana/values.homelab.yaml and ignored values.local.yaml |
+| Prometheus Stack | apps/observability/kube-prometheus-stack/values.yaml |
+| Loki | apps/observability/loki/values.yaml |
+| Tempo | apps/observability/tempo/values.yaml |
+| Alloy | apps/observability/alloy/values.yaml |
+| k6 Operator | apps/observability/k6/values.yaml |
+| Host DNS monitoring | apps/observability/host-dns-monitoring/dns-blackbox.yaml, dns-probes.yaml, host-scrape.yaml |
+| KuchDesk Agent | ../kuchdesk-agent/chart/values.yaml and ignored values.local.yaml |
+
+Helm consumes the listed canonical values directly. Vendored charts load their own base values; private overlays are mode 0600. `scripts/helm-service.py SERVICE --context colima-kuchdesk-fresh` prints a command plan without running it. For upstream charts, supply `--chart` with the reviewed local archive/directory; the script does not download or invent a chart version. `--apply --confirm SERVICE/CONTEXT` applies only the selected owner/context after reviewing its plan. It first lints values and checks bundled CoreDNS/Traefik, then uses Helm 4 rollback-on-failure. For Traefik it applies only the K3s HelmChartConfig; for CoreDNS it inspects the bundled deployment. The legacy Traefik wrapper rejects upgrades.
+
+`service-access.yaml` is the canonical typed publication catalog. NATS20000,
+MailDev SMTP20001, PostgreSQL20003, Redis20004 and RabbitMQ20005 have verified
+Mac/container/Pod TCP paths; inbox API20002 remains disabled. Native gRPC forwards
+discovered TCP/UDP ports, and the existing Bridge repairs owned TCP collisions.
+Installed-version UDP limitations and the exact current connection matrix are
+in the [canonical access guide](../docs/local-service-access.md).
+
+`colima-lima-port-forwards.yaml` is the canonical native Lima rule. It became effective after the one approved 2026-10-19 restart: only discovered guest TCP/UDP listeners in their independent 20000–20099 pools are forwarded to Mac loopback, with verified management exceptions; other automatic application forwarding is ignored before generated catchalls. Guest TCP 53 was explicitly not forwarded at startup. The range does not reserve Mac ports. Preserve SSH, Kubernetes API and socket paths, VM DNS and direct VM HTTPS. `fresh-local.py start` checks the owned profile and persistent override; a later override change requires a separate restart. A stopped profile remains stopped. Check collisions without killing or silently remapping another listener. The override would affect any future profile in the same Lima home, so review it before creating another profile.
+
+Host/MCP reads and edits canonical files through `configyaml/`; Helm consumes those same files and supplies Pod ENV and Secrets. The Kubernetes Agent has no direct access to Mac files and mounts no source directories. File edits preserve unrelated keys; applying a changed value still requires reconciliation. Private overlays remain ignored and mode 0600.
+
+site.json keeps the intended local.dev domain, grafana.local.dev host, new private CA settings, and kubedesk-local-tls Secret name. Run go run ./cmd/render-site to produce new Certificate, ClusterIssuer, TLSStore, and DNS probe configuration for this profile. Grafana's host and TLS name are repeated in its directly consumed values.homelab.yaml and must match. The renderer does not install charts or issue certificates.
+
+## Fresh initialization contract
+
+The current profile uses Colima containerd runtime plus K3s v1.35.0+k3s1 (an observed selection, not a universal version requirement), with `k3sArgs: []` so bundled Traefik remains enabled. The private profile selects 4 CPUs, 8 GiB RAM, a new 80 GiB data disk, reachable VM addressing and a scoped read-only VM build-source mount (never mounted into Pods). It contains no service credential values. Do not add old persistent-volume paths or point the profile at a previous VM. The profile name prepared for later use is `kuchdesk-fresh`; its Kubernetes context is `colima-kuchdesk-fresh`.
+
+Before later startup, verify Colima's actual configuration root (`COLIMA_HOME`/XDG/default rules), prove this named profile is absent and install the prepared local YAML as that new profile's `colima.yaml`. An existing profile must stop the fresh-initialization procedure, not be reset or reused. These instructions describe a new installation; the current named installation is already active and must not be recreated.
 
 ```sh
-cd lab
-go run ./cmd/render-site config snapshot -profile "$PWD/site.json"
-go run ./cmd/render-site config validate -profile "$PWD/site.json" -candidate /absolute/site.next.json
-go run ./cmd/render-site config plan -profile "$PWD/site.json" -candidate /absolute/site.next.json
-go run ./cmd/render-site config dry-run -profile "$PWD/site.json" -candidate /absolute/site.next.json
-go run ./cmd/render-site config apply -profile "$PWD/site.json" -candidate /absolute/site.next.json -confirm PLAN_ID
-go run ./cmd/render-site config rollback -profile "$PWD/site.json" -revision SAVED_REVISION -confirm CURRENT_REVISION
+# Lifecycle commands; never reset/delete an existing installation.
+colima --profile kuchdesk-fresh start --activate=false --port-forwarder grpc
+colima --profile kuchdesk-fresh status --json
+colima --profile kuchdesk-fresh stop
 ```
 
-These commands change only the selected JSON profile. They do not apply DNS,
-TLS, Helm, Kubernetes, firewall, or host-network changes. After an apply or
-rollback, render and review the generated files, then update live components
-through their existing workflows. This is a deliberate apply boundary; there
-is no automatic hot reload of all services.
+`--activate=false` preserves unrelated active contexts. Every kubectl/Helm call selects the named context; image operations use `colima --profile kuchdesk-fresh nerdctl -- --namespace k8s.io`. Do not use Docker Desktop binaries/sockets, node containers or a previous host registry. Only kubectl and Helm clients are required; Colima supplies guest nerdctl and BuildKit. The guest K3s version and runtime must be verified after startup; an installed Colima CLI version is not evidence of a running K3s version.
 
-For another cluster, select its Kubernetes context, DNS zone, issuer, ingress class, storage classes, Secret names, and Infisical scope. The site renderer handles domain and TLS references only; the other Helm values and PostgreSQL manifest remain site-specific overlays. The observability components use Kubernetes search-domain Service names rather than assuming `cluster.local`. Grafana's Infisical endpoint, credential Secret, and path are configurable in `values.homelab.yaml`. Existing PVC storage classes are immutable; changing storage class requires a separate data migration, never just a site render.
+K3s supplies CoreDNS, Traefik, ServiceLB, metrics-server and local-path storage. Read their live resources before configuration, so a disabled/missing packaged component is a blocker rather than a reason to install a duplicate controller. Create only new claims in the dedicated cluster. Grafana and Technitium explicitly select local-path; the other new claims use the new cluster's default class. Prometheus/Alertmanager ephemeral defaults are not evidence of persistent retention.
 
-This directory keeps the Grafana observability stack, k6 Operator, and the platform configuration required for local HTTPS and Infisical-backed Grafana credentials. It does not manage the KuchDesk dashboard, shared application databases, or unrelated home-lab services.
+Install cert-manager, then newly generated CA/certificate resources from `cmd/render-site`, Traefik configuration, Technitium, observability and the Agent in dependency order. Operator CRDs/ServiceMonitors require their existing chart dependencies; the plan is not a full dependency orchestrator. The local MailDev chart provides a disposable SMTP sink in `vero`. NATS uses the pinned official chart archive and canonical values in `apps/platform/nats`; its private auth manifest is applied as a namespaced Secret before Helm. Shared PostgreSQL and Redis charts copy the Finance server contracts into `apps/platform/postgresql` and `apps/platform/redis`; `apps/platform/rabbitmq` supplies its development broker. Their fresh credentials and installation state are recorded in the current diagnostics. Finance source definitions remain until a separately verified cutover.
 
-The runtime on Docker Desktop Kubernetes consists of Grafana and its image renderer, Prometheus Stack, Loki, Tempo, Alloy, and k6 Operator. cert-manager and Traefik provide HTTPS for the selected site domain; Infisical and its operator supply `observability/grafana-admin`. The existing Grafana, Loki, Tempo, and Infisical PVCs are reused. Loki's chart values retain its PVC when the StatefulSet scales down or is removed.
+## DNS, ingress and TLS boundaries
 
-## TLS certificate name and existing installations
+Inside Kubernetes, CoreDNS resolves `SERVICE.NAMESPACE.svc.cluster.local`. The Agent discovers these service names through the Kubernetes API. macOS and ordinary containerd containers do not inherit Kubernetes Service DNS or ClusterIP routing. Use the published-port paths in the canonical access guide for applications; temporary diagnostic port-forwards are separate. `host.lima.internal` denotes the Mac from Lima/Colima; its resolution/reachability from Pods and the optional macOS metrics scrape must be checked later. It is not a Kubernetes service address or a replacement for the verified VM ingress IP.
 
-The checked-in profile selects `tls.secretName: "kubedesk-local-tls"` for a
-fresh installation. The renderer uses this name for every namespace's leaf
-Certificate and target Secret, Traefik's default TLSStore, both application
-Ingress overlays, and the `secretName` summary field. CA and issuer names are
-configured separately and do not change with this field.
+The Technitium chart exposes DNS on TCP/UDP53 with its local-path claim. Its internal admin Service is retained; the approved Mac HTTPS route uses its native login and a source filter. The Host Agent's loopback port-forward path is unchanged. The `*.local.dev` answer must point to the verified reachable Colima ingress address, not the Mac's default-route interface. Shared-mode VM addressing does not establish LAN-wide routing. See the canonical access guide for verified panels and the route-only UI chart.
 
-An explicit `tls.secretName` can select an existing or custom certificate name;
-it remains unchanged when `--domain` overrides the domain. Profiles that omit
-the field or leave it empty keep the older domain-derived convention, such as
-`local-dev-tls` for `local.dev`.
+K3s Traefik owns HTTP 80 and HTTPS 443. `core/ingress/traefik-k3s.yaml` configures HTTP-to-HTTPS redirection without a second Traefik release. Cert-manager creates a fresh private CA and leaf certificates. `site.json` retains `local.dev`, `grafana.local.dev` and `kubedesk-local-tls`; Grafana's direct values must agree. TLSStore is in kube-system and Grafana's leaf Secret is in observability. Certificate issuance, macOS trust, ServiceLB exposure and HTTPS health remain runtime checks. No TCP/TLS passthrough route is defined in the current sources; none is claimed as existing.
 
-For an existing installation, retain its current name in the deployment profile
-before rendering from an updated checkout. For example, set
-`tls.secretName: "local-dev-tls"` to keep that installation's current references.
-Review the generated diff before applying it. Changing the name renders a new
-Certificate/Secret target; it does not rename or migrate an existing Secret.
-For a domain migration, choose a distinct `tls.secretName` for the replacement
-certificate so provisioning it first does not overwrite the active target.
-Rendering neither issues keys nor updates live consumers. Applying a new
-Certificate, changing live TLS references, issuing or copying private keys, or
-retiring old resources needs a separately approved migration with certificate
-readiness and service verification. The fresh-install default is not approval
-to migrate this installation's active TLS.
+## Images and source configuration
 
-## Prerequisites
+The Agent's OCI Dockerfile builds from the repository root. `.dockerignore` excludes private YAML and runtime metadata. Builds run in Colima containerd namespace `k8s.io`, the store visible to k3s. No Docker daemon, CLI, Buildx, registry push or KIND node import is required. Upstream publisher versions/digests stay pinned.
 
-- The `docker-desktop` Kubernetes context is selected and its node is Ready.
-- DNS resolves the generated `grafanaUrl` and `infisicalUrl` hosts to the ingress address. For a private CA, trust its root certificate on the client host.
-- `platform-secrets/infisical-secrets`, `platform-secrets/infisical-postgresql`, and `platform-secrets/infisical-universal-auth` exist. Provision credentials through the established secret workflow; do not place them in Helm values or Git. The Operator scope includes `development-tools` for the opt-in [Infisical-to-Helm probe](tests/infisical-helm-probe/README.md); the probe uses a dedicated Infisical path and creates no public Service.
-- A new Infisical PostgreSQL installation needs a default StorageClass. The checked-in StatefulSet manifest leaves its class unset. On an existing installation, keep the bound PVC and StatefulSet template unchanged; this field is immutable and reapplying the manifest will fail.
-- Set `INFISICAL_PROJECT_SLUG` and `INFISICAL_ENV_SLUG` to the active Infisical project and environment. Override the chart's sample scope for every deployment.
+The Host workflow records full source commit, platform and build-input hash. Explicitly authorized uncommitted source uses `git-<12-HEAD>-dirty-<12-input-hash>`; no commit or release is created. Native containerd target metadata provides the manifest/index digest; it is distinct from the config ID. Content completeness is checked before Helm consumes the real identity persisted in canonical Agent YAML. Existing immutable tags are never overwritten; unverified build reuse is rejected.
 
-## Deployment order
+`python3 lab/scripts/fresh-local.py start` creates only the dedicated profile after an ownership/absence gate and preserves active contexts. `charts` fetches the exact official packages in `charts.lock.json` and checks SHA-256 before reuse. `build-agent` runs the source-identity, preflight, build, digest and Agent rollout workflow. `reconcile` installs existing charts in CRD/dependency order, configures bundled Traefik, and reconciles certificates. `verify` checks the actual node/VM/runtime identity. `stop` is ownership-gated. No command performs global cleanup or data migration.
 
-The pinned versions below match the verified local stack. Run these commands from `lab/`.
-Go 1.23 or newer is required. `--get` reads the last rendered summary from `.generated`; pass the same `--output` directory when using a separate profile output.
+The replacement MCP is installed and registered only during phase 7 after runtime verification; check the final report rather than assuming this source guide proves activation.
 
-For a **new** PostgreSQL installation only, first check `kubectl get storageclass` and confirm one default class exists, then apply `apps/platform/infisical/manifests/postgresql.yaml` after provisioning its Secret. Do not apply that manifest over the existing `infisical-postgresql` StatefulSet: its current `local-path` volume template cannot be changed in place. Keep the existing bound PVC and use a planned data migration if its storage class ever needs to change.
+## Offline validation and later gates
 
-```bash
-helm repo add cert-manager https://charts.jetstack.io
-helm repo add traefik https://traefik.github.io/charts
-helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts/
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-go run ./cmd/render-site
-SITE_CERT_NAME=$(go run ./cmd/render-site --get secretName)
-kubectl create namespace observability --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace platform-tests --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace platform-networking --dry-run=client -o yaml | kubectl apply -f -
-# Retain observability-tests for the existing k6 Helm release record.
-helm upgrade --install cert-manager cert-manager/cert-manager -n platform-system --create-namespace --version v1.21.0 -f apps/platform/cert-manager/values.yaml --wait
-if test -f .generated/manifests/00-selfsigned-issuer.json; then
-  CA_CERT_NAME=$(go run ./cmd/render-site --get caSecretName)
-  CA_NAMESPACE=$(go run ./cmd/render-site --get caNamespace)
-  kubectl apply -f .generated/manifests/00-selfsigned-issuer.json
-  kubectl apply -f .generated/manifests/01-ca-certificate.json
-  kubectl -n "$CA_NAMESPACE" wait --for=condition=Ready "certificate/$CA_CERT_NAME" --timeout=180s
-  kubectl apply -f .generated/manifests/02-ca-issuer.json
-fi
-for certificate in .generated/manifests/10-certificate-*.json; do kubectl apply -f "$certificate"; done
-for namespace in $(go run ./cmd/render-site --get certificateNamespaces); do
-  kubectl -n "$namespace" wait --for=condition=Ready "certificate/$SITE_CERT_NAME" --timeout=180s
-done
-# Helm metadata stays in platform-system; the reviewed renderer targets platform-networking.
-# See migrations/traefik-platform-networking/README.md before changing this workflow.
-./scripts/helm-traefik.sh upgrade --install traefik traefik/traefik -n platform-system --version 39.0.7 -f core/ingress/traefik-docker-desktop-values.yaml --wait
-kubectl apply -f .generated/manifests/20-default-tlsstore.json -f core/exposure/docker-desktop/traefik-lan.yaml
-helm upgrade --install infisical infisical-helm-charts/infisical -n platform-secrets --version 0.4.2 -f apps/platform/infisical/values.yaml -f .generated/infisical-values.json --wait
-kubectl apply -f apps/platform/infisical/manifests/https-redirect.yaml
-# Infisical Operator: use the approval-gated, checksum-pinned local-chart workflow
-# in apps/platform/infisical-operator/README.md; a bare upstream upgrade restores broad TokenRequest grants.
-helm upgrade --install loki grafana/loki -n observability --version 7.0.0 -f apps/observability/loki/values.yaml --wait
-./scripts/helm-monitoring.sh upgrade --install monitoring prometheus-community/kube-prometheus-stack -n observability --version 87.15.1 -f apps/observability/kube-prometheus-stack/values.yaml --wait
-kubectl apply -f .generated/manifests/30-dns-blackbox-config.json
-kubectl apply -k apps/observability/host-dns-monitoring
-kubectl apply -k apps/observability/grafana/manifests/dashboard
-helm upgrade --install tempo grafana/tempo -n observability --version 1.24.4 -f apps/observability/tempo/values.yaml --wait
-helm upgrade --install alloy grafana/alloy -n observability --version 1.10.1 -f apps/observability/alloy/values.yaml --wait
-helm upgrade --install grafana ./apps/observability/grafana -n observability -f apps/observability/grafana/values.homelab.yaml -f .generated/grafana-values.json --set-string infisical.projectSlug="${INFISICAL_PROJECT_SLUG}" --set-string infisical.envSlug="${INFISICAL_ENV_SLUG}" --wait
-# Existing k6 release requires its namespace post-renderer; see migrations/k6-platform-tests/README.md.
-kubectl apply -k apps/observability/k6/dashboard
-```
+Run Go tests in configyaml, host-agent, kuchdesk-agent and lab; run the Python planner/recovery unit tests. Helm lint/template with private inputs must keep rendered output private. Agent chart tests use synthetic image/tag/digest values, which do not establish a deployable current image. Optional upstream archive tests report skips when their reviewed archives are unavailable.
 
-After installation, confirm `observability/grafana-admin` reports `ReadyToSyncSecrets=True` and the Grafana Deployment is Ready. The image renderer is part of the Grafana chart. For changes to a live release, render and server-side dry-run before applying.
+Later acceptance must verify the exact VM/profile/context and containerd k8s.io store, K3s node runtime, scoped VM build-source mount and Host file locks, packaged controllers, fresh claims, image manifest/platform identity, Agent authentication/readiness, internal DNS versus macOS DNS, Technitium wildcard answers, certificate issuance/trust and HTTP/HTTPS responses. No infrastructure or connectivity conclusion follows from these offline checks.
 
-The homelab profiles retain the approved shared anonymous Grafana **Editor** role
-and three-day history settings: Loki 72h, Prometheus 3d, Alertmanager 72h, and the
-existing Tempo 72h. Anonymous Editor includes dashboard/folder deletion and
-alert/notification editing on the existing ingress; it does not grant server or
-user administration. Review this profile's access before using it for another
-installation. Grafana annotation expiry remains excluded.
-
-Use `scripts/helm-monitoring.sh` for both `template` and `upgrade`. Its temporary,
-process-scoped Helm 4 plugin applies the checked-in renderer to the pinned
-87.15.1 chart, aligning API-server availability records and dashboard labels to
-3d while preserving every alert definition. Bare monitoring Helm commands
-restore the chart's 30d records and dashboard and are not the supported path.
-Missing, duplicate, changed or previously transformed renderer targets fail
-closed. Existing-release upgrades also need the reviewed admission-hook scope;
-the completed retention upgrade used `--no-hooks` to leave seven unchanged
-hooks unexecuted. First installation still needs its normal admission setup.
-
-The Loki profile now explicitly maps local ruler storage to the sidecar's shared
-`/rules` directory and retains the approved sidecar digest. This source correction
-has not been deployed or tested with a live rule fixture; review the bounded
-Loki rollout/test before changing the existing release.
-
-The Host and DNS dashboard covers the Docker Desktop Kubernetes node, the macOS host, and Technitium DNS. macOS node_exporter must be reachable from the cluster at `host.docker.internal:9101`; this installation already runs it as a LaunchAgent. `host-dns-monitoring/` scrapes that endpoint and probes the generated site hostname through Technitium and Docker Desktop's host DNS endpoint, plus public recursive DNS through Technitium, every 30 seconds. The DNS probe uses a rendered ConfigMap and automatically reloads it, so a site-domain change only needs the generated ConfigMap reapplied. The Technitium HTTP health endpoint can return HTTP 200 with an `invalid-token` payload and does not prove DNS works.
-
-The DNS reconciler is a one-shot macOS LaunchAgent that repeats every 30 seconds. Install it from the repository root with the intended site zone and cluster context. When a VPN owns the default route, set `KUCHDESK_HOST_AGENT_INTERFACE` to the physical LAN interface (currently `en0` on this Mac); select the appropriate interface on another host.
-
-```bash
-KUCHDESK_HOST_AGENT_ZONE=$(cd lab && go run ./cmd/render-site --get domain) \
-KUCHDESK_HOST_AGENT_KUBE_CONTEXT=docker-desktop \
-KUCHDESK_HOST_AGENT_INTERFACE=en0 \
-./host-agent/install-macos.sh
-```
-
-The k6 Operator uses Prometheus's enabled remote-write receiver. The dashboard ConfigMaps are discovered by Grafana's sidecar. The one-iteration smoke TestRun can be started with `kubectl apply -f apps/observability/k6/tests/smoke-test.yaml`.
-
-## Verification
-
-```bash
-kubectl -n observability get pods,pvc
-kubectl -n observability get infisicalsecret grafana-admin
-kubectl -n platform-tests get deploy,servicemonitor,testruns.k6.io
-curl --fail "$(go run ./cmd/render-site --get grafanaUrl)/api/health"
-kubectl get --raw '/api/v1/namespaces/observability/services/http:loki:3100/proxy/ready'
-kubectl get --raw '/api/v1/namespaces/observability/services/http:tempo:3200/proxy/ready'
-kubectl get --raw '/api/v1/namespaces/observability/services/http:monitoring-kube-prometheus-prometheus:9090/proxy/-/ready'
-kubectl -n observability get scrapeconfig macos-host
-kubectl -n observability get probe technitium-site-dns technitium-recursive-dns docker-host-site-dns
-kubectl -n observability rollout status deployment/dns-blackbox
-SITE_HOST=$(go run ./cmd/render-site --get grafanaUrl)
-dig @127.0.0.1 "${SITE_HOST#https://}" A
-```
-
-## Domain and certificate changes
-
-1. Change `domain` in `site.json`, or render a separate profile with `go run ./cmd/render-site --profile path/to/site.json --output path/to/generated`. For a public domain, select an already configured `ClusterIssuer` with `tls.issuer.type: existing` and its name. A wildcard certificate needs a suitable DNS-01 issuer. For a private CA, its Secret namespace must match cert-manager's configured cluster-resource namespace. The renderer does not create DNS records or ACME credentials.
-2. Inspect generated manifests and Helm overlays. Apply the new Certificate resources and wait for each certificate to be `Ready` **before** switching Ingress or the default TLSStore. The domain-derived Secret name lets old and new certificates coexist. For an external issuer, skip the private-CA issuer/CA steps. Apply the TLSStore only after its namespace's Secret exists.
-3. Update the Technitium DNS zone and the host agent's `KUCHDESK_HOST_AGENT_ZONE` setting to the new domain, then confirm resolution. Update the existing `platform-secrets/infisical-secrets` `SITE_URL` through the established secret workflow to match generated `infisicalUrl`; never put its other secret values in Git. Upgrade Infisical and Grafana with the generated overlays, then verify HTTPS, redirects, and login. Keep old DNS and certificates during a planned transition; remove them separately after verification.
-
-cert-manager renews issued certificates and updates their Secrets automatically. Traefik can reload updated TLS Secrets without a process restart. A domain change to Grafana's `root_url` and Infisical's `SITE_URL` still requires their application pods to reload configuration; with the current single Grafana replica and `ReadWriteOnce` PVC, expect a brief interruption. DNS changes also depend on resolver caches. This is deploy-time reconfiguration and automatic certificate renewal, not hot reload of every application setting.
+Official references: [Colima v0.10.3 runtime/image contract](https://github.com/abiosoft/colima/blob/v0.10.3/README.md#kubernetes), [Colima configuration](https://github.com/abiosoft/colima/blob/v0.10.3/embedded/defaults/colima.yaml), [K3s packaged networking](https://docs.k3s.io/networking/networking-services), [K3s registry configuration](https://docs.k3s.io/installation/private-registry). Private/HTTP registries need explicit fresh node configuration and are not inferred from an old loopback listener.

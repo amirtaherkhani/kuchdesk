@@ -14,9 +14,17 @@
 /lab/*.json.rollback-*
 /work/
 /.worktrees/
+**/values.local.yaml
+/lab/apps/platform/*/auth.local.yaml
 # Private enrollment policy/session journals; never committed or synced.
 /.kuchdesk/
 
 # Generated data from earlier checkouts may still exist locally.
 /.vinext/
 /.wrangler/
+
+/lab/colima-k3s.local.yaml
+**/.kuchdesk-values.lock
+
+/host-agent/bridge-values.local.yaml
+/lab/core/ingress/ui/auth.local.yaml

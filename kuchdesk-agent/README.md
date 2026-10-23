@@ -179,7 +179,7 @@ native browser `EventSource` cannot set an Authorization header.
 
 ## CoreDNS service aliases
 
-On Docker Desktop KIND, CoreDNS reads `kube-system/coredns`'s `Corefile` key.
+On K3s, CoreDNS reads `kube-system/coredns`'s `Corefile` key. The Agent accepts a single standard `.:53` block with `kubernetes` and `reload`; verify that shape before enabling writes on the new cluster.
 When explicitly enabled, the agent inserts a marked block into the existing
 `.:53` server block. It preserves all other Corefile content and refuses an
 unsupported layout, incomplete markers, or a rewrite outside its managed
@@ -235,8 +235,8 @@ through `external-dns`.
 | `KUCHDESK_CLUSTER_ID` | required; unique, stable cluster identity |
 | `KUCHDESK_CLUSTER_NAME` | required; human-readable display name |
 | `KUCHDESK_CLUSTER_DOMAIN` | `cluster.local` |
-| `KUCHDESK_AGENT_TOKEN` | empty, internal endpoint unauthenticated |
-| `KUCHDESK_KUBE_CONTEXT` | empty; optional context override for local kubeconfig use |
+| `KUCHDESK_AGENT_TOKEN` | required; protects every API endpoint except health/readiness probes |
+| `KUCHDESK_KUBE_CONTEXT` | required explicit `colima` or `colima-<profile>` context for host execution; unset in-cluster |
 | `KUCHDESK_DNS_MANAGEMENT_ENABLED` | `false` |
 | `KUCHDESK_COREDNS_NAMESPACE` | `kube-system` |
 | `KUCHDESK_COREDNS_CONFIGMAP` | `coredns` |
@@ -250,10 +250,9 @@ through `external-dns`.
 
 Inside Kubernetes, the agent uses its mounted ServiceAccount unless a
 `KUBECONFIG` or `KUCHDESK_KUBE_CONTEXT` override is supplied. On a developer
-Mac, it falls back to the standard kubeconfig search path, supports the
-platform's multi-file `KUBECONFIG` path list, and accepts an explicit context.
-Set `KUCHDESK_KUBE_CONTEXT` when running locally against more than one cluster
-to avoid relying on a changing current context. The Helm chart leaves both
+Mac, it uses the standard kubeconfig search path and supports the
+platform's multi-file `KUBECONFIG` path list. Host execution requires an explicit
+`KUCHDESK_KUBE_CONTEXT=colima` or `colima-<profile>`; current-context fallback is disabled. The Helm chart leaves both
 local overrides unset and continues to use the in-cluster ServiceAccount.
 
 DNS management requires a non-empty `KUCHDESK_AGENT_TOKEN`; the agent refuses
@@ -268,7 +267,8 @@ For local development:
 ```bash
 KUCHDESK_CLUSTER_ID=local \
 KUCHDESK_CLUSTER_NAME='Local cluster' \
-KUCHDESK_KUBE_CONTEXT=docker-desktop \
+KUCHDESK_AGENT_TOKEN="$LOCAL_AGENT_TOKEN" \
+KUCHDESK_KUBE_CONTEXT=colima-kuchdesk-fresh \
 go run ./cmd/kuchdesk-agent
 ```
 
@@ -279,3 +279,35 @@ analysis:
 go test -race ./...
 go vet ./...
 ```
+
+## Canonical YAML and Colima deployment
+
+Host/MCP reads and edits tracked service/chart YAML plus ignored mode-0600
+`values.local.yaml`. Helm consumes those files and supplies the Agent's Pod
+configuration through ENV and Kubernetes Secrets. The Agent never mounts Mac
+configuration files and has no direct YAML read/edit endpoints. Changes require
+an explicit Helm upgrade and Pod rollout; password rotation also requires the
+service's credential procedure and corresponding client updates.
+
+The chart creates the Agent bearer Secret from local `auth.token` when
+`auth.existingSecret` is empty. Existing Secret references remain supported.
+Every API endpoint requires bearer authentication; `/healthz` and `/readyz`
+remain available to Kubernetes probes. The optional HTTPS Host Bridge retains
+its separately authenticated Doctor route independently of Kubernetes management.
+It works with `agent.managementEnabled=false` and `rbac.clusterAdmin=false`. Set its private bearer through
+`hostBridge.token` and public trust certificate through `hostBridge.caPEM` in the
+ignored Agent overlay; Helm creates matching Secret and CA ConfigMap references.
+Existing `tokenSecretName` and `caConfigMapName` references remain supported as
+alternatives. The Host listener starts from mode-0600
+`host-agent/bridge-values.local.yaml` using `kuchdesk-host-bridge -values <path>`;
+its `token` must match the Agent overlay and its certificate must cover the
+configured bridge URL.
+
+Build the OCI image from the repository root with `kuchdesk-agent/Dockerfile`
+using Colima's containerd build tooling. Record the source commit, dirty build
+input identity when applicable, platform, and resulting image digest. The chart
+accepts `git-<12-hex>` or `git-<12-hex>-dirty-<12-hex-input-hash>` tags and an optional
+verified digest. Deliver the complete image into the selected Colima profile's
+Kubernetes-visible `k8s.io` containerd namespace before deployment. A tag in
+another image store does not establish that k3s can run it. The root
+`.dockerignore` excludes private local YAML. This chart does not register MCP.

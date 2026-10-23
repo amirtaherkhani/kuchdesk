@@ -1,0 +1,5 @@
+# Colima 0.10.3 guest containerd 2.3.1. Match the selected k3s arm64 bundle.
+version = 4
+
+[plugins."io.containerd.cri.v1.images".pinned_images]
+  sandbox = "docker.io/rancher/mirrored-pause:3.6"

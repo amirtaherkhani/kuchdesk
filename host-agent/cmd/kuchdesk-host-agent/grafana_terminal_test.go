@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='grafana-pty-dummy-') as td:
         if capture.exists(): capture.unlink()
         pid, master=pty.fork()
         if pid==0:
-            env=dict(os.environ,PATH=td+':'+os.environ.get('PATH',''),DUMMY_CAPTURE=str(capture),KUCHDESK_TEST_GRAFANA_CLI='1',KUCHDESK_TEST_GRAFANA_ARGS='grafana-admin-password-reset\n--kube-context\ndummy-context\n--user-id\n42')
+            env=dict(os.environ,PATH=td+':'+os.environ.get('PATH',''),DUMMY_CAPTURE=str(capture),KUCHDESK_TEST_GRAFANA_CLI='1',KUCHDESK_TEST_GRAFANA_ARGS='grafana-admin-password-reset\n--kube-context\ncolima-dummy\n--user-id\n42')
             if mode=='redirect':
                 null=os.open(os.devnull,os.O_WRONLY);os.dup2(null,2);os.close(null)
             os.execve(sys.argv[1],[sys.argv[1],'-test.run=^TestGrafanaCLIProcess$'],env)

@@ -1,0 +1,22 @@
+{{- if .Values.smtpPublish.enabled }}
+{{- if not .Values.smtpPublish.sourceRanges }}{{- fail "SMTP publication requires local source ranges" }}{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.smtpPublish.serviceName }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  allocateLoadBalancerNodePorts: false
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.smtpPublish.sourceRanges | nindent 4 }}
+  selector:
+    app.kubernetes.io/name: finance-maildev
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: smtp
+      port: {{ .Values.smtpPublish.port }}
+      targetPort: smtp
+      protocol: TCP
+      nodePort: null
+{{- end }}

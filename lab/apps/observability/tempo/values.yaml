@@ -59,3 +59,9 @@ compactor:
 
 gateway:
   enabled: false
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: monitoring
+  interval: 30s
+  scrapeTimeout: 10s

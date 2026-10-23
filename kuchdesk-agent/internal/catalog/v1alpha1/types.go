@@ -38,7 +38,6 @@ type Component struct {
 	Endpoints           []Endpoint           `json:"endpoints,omitempty"`
 	HealthChecks        []HealthCheck        `json:"healthChecks,omitempty"`
 	Observability       Observability        `json:"observability,omitempty"`
-	SecretRefs          []SecretRef          `json:"secretRefs,omitempty"`
 }
 
 type ExternalConnection struct {
@@ -74,15 +73,6 @@ type Observability struct {
 	Dashboards []string `json:"dashboards,omitempty"`
 	Metrics    []string `json:"metrics,omitempty"`
 	Logs       []string `json:"logs,omitempty"`
-}
-
-type SecretRef struct {
-	Provider       string   `json:"provider"`
-	ProjectRef     string   `json:"projectRef"`
-	EnvironmentRef string   `json:"environmentRef"`
-	Path           string   `json:"path"`
-	SecretName     string   `json:"secretName,omitempty"`
-	Keys           []string `json:"keys,omitempty"`
 }
 
 type InstallationProfile struct {

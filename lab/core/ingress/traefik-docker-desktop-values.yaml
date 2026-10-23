@@ -1,4 +1,5 @@
-# Docker Desktop's Traefik release is managed directly by Helm. Watch all
+# Historical offline render fixture; fresh K3s uses traefik-k3s.yaml.
+# Docker Desktop's Traefik release was managed directly by Helm. Watch all
 # namespaces so newly enabled KuchDesk modules do not need controller edits.
 deployment:
   kind: Deployment

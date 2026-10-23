@@ -49,9 +49,9 @@ func TestParseInstallationProfileExample(t *testing.T) {
 	}
 }
 
-func TestParseModuleRejectsUnknownSecretValueAndVersion(t *testing.T) {
+func TestParseModuleRejectsUnknownFieldAndVersion(t *testing.T) {
 	data := fixture(t, "service-modules", "managed.example.yaml")
-	withPassword := strings.Replace(string(data), "secretName: example-database", "secretName: example-database\n        password: raw-secret", 1)
+	withPassword := strings.Replace(string(data), "    observability:", "    password: raw-secret\n    observability:", 1)
 	if _, err := ParseServiceModule([]byte(withPassword)); err == nil {
 		t.Fatal("expected unknown raw secret field to be rejected")
 	}

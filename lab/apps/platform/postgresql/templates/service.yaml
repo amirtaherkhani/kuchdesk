@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports: [{name: postgresql, protocol: TCP, port: 5432, targetPort: 5432}]
+---
+{{- if .Values.publication.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-public
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports: [{name: postgresql, protocol: TCP, port: {{ .Values.publication.port }}, targetPort: 5432}]
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgresql
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports: [{protocol: TCP, port: 5432}]
+  egress: []

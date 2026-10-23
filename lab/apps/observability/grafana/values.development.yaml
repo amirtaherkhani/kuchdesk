@@ -1,11 +1,5 @@
-# Shared approved development behavior; layer site/Infisical settings separately.
+# Shared approved development behavior; supply site and admin values directly.
 # Use only on deployments intended to permit anonymous development editing.
-envFromSecret: grafana-admin
-admin:
-  existingSecret: grafana-admin
-  userKey: GRAFANA_ADMIN_USER
-  passwordKey: GRAFANA_ADMIN_PASSWORD
-
 grafana.ini:
   auth.anonymous:
     enabled: true

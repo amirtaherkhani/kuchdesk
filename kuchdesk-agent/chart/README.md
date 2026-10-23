@@ -1,87 +1,34 @@
 # KuchDesk Agent Helm chart
 
-This standalone chart deploys the Kubernetes agent as one internal cluster service. Discovery is read-only by default. It does not install an image registry, secret manager, DNS server, dashboard, or other shared services.
+The chart installs the Kubernetes discovery and management agent. It defaults to read-only discovery; CoreDNS writes, general management, exec, port forwarding, and the HTTPS Host Bridge are separate opt-ins. Set `cluster.id`, `cluster.name`, an immutable `image.tag`, and `image.repository` explicitly. Tags must use `git-<12-hex>` or `git-<12-hex>-dirty-<12-hex-input-hash>` from the actual source/build inputs. Set `image.digest` to the verified digest when available in the target store.
 
-For the migrated home-lab release, follow the [agent namespace workflow](../../lab/migrations/agent-platform-tools/README.md): workload namespace `platform-tools`, Helm metadata `development-tools`. Ordinary unrendered upgrades would revert the move. The examples below describe a fresh installation.
+## Canonical Helm values
 
-Supply an image already available to the Kubernetes runtime and use an immutable tag. Set a unique cluster ID and display name for each cluster; the chart has no home-lab identity baked in. Create the bearer token Secret in the target namespace before installation; the chart reads it but does not manage its lifecycle. For example, with a token obtained through your normal secret workflow:
+Use tracked `values.yaml` plus ignored `values.local.yaml` for a new local deployment. Copy the key names from `values.local.example.yaml`, generate a fresh `auth.token`, set `auth.existingSecret: ""`, and keep the private file mode 0600. Helm supplies Pod ENV and creates the Agent bearer Secret; the Pod references that same Secret. Mac files are never mounted into the Pod. Every Agent API endpoint requires bearer authentication; health/readiness probes remain unauthenticated. Existing installations can continue to use `auth.existingSecret` without placing its value in Helm input. Do not set both.
 
-```bash
-kubectl create namespace development-tools --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n development-tools create secret generic kuchdesk-agent-auth \
-  --from-literal=KUCHDESK_AGENT_TOKEN="${KUCHDESK_AGENT_TOKEN}"
-helm upgrade --install kuchdesk-agent ./kuchdesk-agent/chart \
-  --namespace development-tools \
-  --set cluster.id=development \
-  --set cluster.name='Development cluster' \
-  --set image.repository=REGISTRY/kuchdesk-agent \
-  --set image.tag=IMMUTABLE_TAG
+```sh
+helm lint ./kuchdesk-agent/chart -f ./kuchdesk-agent/chart/values.local.yaml \
+  --set cluster.id=example --set cluster.name='Example cluster' \
+  --set image.repository=example.invalid/kuchdesk-agent \
+  --set image.tag=git-123456789abc
 ```
 
-Do not put the token in Helm values or Git. If the image is loaded directly into Docker Desktop Kubernetes, use its matching repository and tag. The chart does not require a local registry. Its `appVersion` tracks the Go binary; the chart `version` tracks chart changes.
+Rendering Helm output can expose Secret values; redirect it to a private file when review is necessary. Changes to the local values file do not rotate credentials in an existing running installation without an explicit upgrade and any required client updates.
 
-`image.digest` optionally pins the manifest by `sha256`. When supplied, the
-rendered reference is `repository:tag@sha256:...`; the digest determines the
-content Kubernetes pulls. The host deployment workflow resolves this digest
-after a successful push and supplies it to Helm. A tag alone remains supported
-for images already loaded into a local node.
+## Access boundaries
 
-Clients send `Authorization: Bearer <token>` to the internal Service. Limit which clients can reach it. `networkPolicy.enabled` is off by default; when enabling it, set `networkPolicy.ingressPodSelector` to select authorized client Pods.
+- `dnsManagement.enabled` permits edits only to the configured existing CoreDNS ConfigMap when its narrow Role is installed. Back up and review the Corefile before a live change.
+- `agent.managementEnabled` requires an agent bearer and `rbac.clusterAdmin=true`. This grants the dedicated Agent ServiceAccount broad Kubernetes API access and must be approved for the target cluster.
+- `agent.execEnabled` and `agent.portForwardEnabled` require management. Port forwarding is short-lived and uses a loopback listener inside the Agent Pod.
+- `hostBridge.enabled` requires an HTTPS origin, a separate bridge bearer (`hostBridge.token` in private local YAML or `tokenSecretName`), and optionally `caPEM` or `caConfigMapName`. Inline private values create dedicated Secret/ConfigMap resources; use one source per resource. Supply the issuing CA certificate, never the server private key or self-signed leaf. The deployment checksums that public CA input so a trust-root update rolls the Agent. The bridge forwards only authenticated Doctor requests and works with read-only discovery; it does not enable Kubernetes management or expand RBAC. It has no public Service route by default.
 
-The default ClusterRole allows discovery and metrics reads. CoreDNS alias writes and general resource management are disabled by default. General management requires an explicit bearer Secret and `rbac.clusterAdmin=true`, granting the agent ServiceAccount full cluster access. DNS alias management needs the bearer Secret but uses a narrow Role for `get` and `update` on the existing CoreDNS ConfigMap. Review the [agent API](../README.md) before enabling it. On Docker Desktop KIND, set `dnsManagement.enabled=true` only after backing up `kube-system/coredns` and verifying its `Corefile` contains a `.:53` block with `kubernetes` and `reload`. The agent owns only its marked block and the chart never creates the system ConfigMap.
+The Agent still runs when the Metrics API is unavailable; CPU and memory measurements are then absent. `service.targetPort` sets the HTTP listener port. A chart upgrade and Pod rollout are required for changed environment values. See [the Agent API](../README.md) and [the Host Bridge boundary](../../docs/host-control-plane.md).
 
-`agent.execEnabled` is an additional opt-in switch, default `false`. It
-requires `agent.managementEnabled=true`, an existing bearer Secret, and the
-existing management RBAC configuration. It adds no Role or Secret. The
-noninteractive Pod exec API returns bounded stdout/stderr; restrict callers to
-trusted administrators because commands may read application data. Enabling
-this switch requires a Helm upgrade and Pod restart; do not place commands or
-tokens in chart values.
-
-`agent.portForwardEnabled` is a separate opt-in switch, also default `false`.
-It requires the same management bearer Secret and RBAC. The agent accepts only
-authenticated WebSocket clients without a browser `Origin`, then opens a
-short-lived loopback tunnel inside its own Pod to one running Pod port. The
-session has a five-minute lifetime, a 30-second idle timeout, four concurrent
-session slots, and a 64 MiB limit in each direction. It adds no public Service
-port or new RBAC grant. Keep this disabled unless the clients are trusted
-administrators; a tunnel can carry sensitive application traffic.
-
-`hostBridge.enabled` is another opt-in switch, default `false`. It requires
-`agent.managementEnabled=true`, the existing agent bearer Secret, an HTTPS
-`hostBridge.url`, and a separate `hostBridge.tokenSecretName`. Optional
-`hostBridge.caConfigMapName` supplies the host CA certificate as `ca.crt`.
-The chart references only Secret and ConfigMap names; do not put either the
-bridge token or Infisical Universal Auth pair in Helm values. Once the host
-HTTPS service and cluster route have been approved and verified, authorized
-clients can call `POST /v1/host/infisical/commands` and
-`POST /v1/host/doctor` through the agent. The host bridge remains absent from
-the agent API while disabled. See the [control-plane design](../../docs/host-control-plane.md).
-
-The agent can start without `metrics.k8s.io`; CPU and memory usage remain unavailable until a compatible metrics-server is installed.
-
-`service.targetPort` sets both the container port and the agent's HTTP listener. Use `agent.listenHost` only to change the bind host; the default listens on all interfaces. Remove any old `agent.listenAddress` override when upgrading from chart 0.5.x. Direct binary invocations also require `KUCHDESK_CLUSTER_ID` and `KUCHDESK_CLUSTER_NAME`; they no longer silently identify an unknown cluster as `default`.
-
-When upgrading from chart 0.4.x, set `cluster.id` and `cluster.name` explicitly. Reuse the previous values for an existing installation so its identity does not change.
-
-```bash
-helm lint ./kuchdesk-agent/chart \
-  --set cluster.id=example \
-  --set cluster.name='Example cluster' \
-  --set image.repository=example.invalid/kuchdesk-agent \
-  --set image.tag=0.9.0
-helm template kuchdesk-agent ./kuchdesk-agent/chart \
-  --namespace development-tools \
-  --set cluster.id=example \
-  --set cluster.name='Example cluster' \
-  --set image.repository=example.invalid/kuchdesk-agent \
-  --set image.tag=0.9.0
-```
-
-`baseProject.name` defaults to `Kubedesk Platform` and populates
-`KUCHDESK_BASE_PROJECT_NAME`. Optional `baseProject.id` and `baseProject.slug`
-populate explicit base-project metadata, returned by authenticated
-`GET /v1/platform`. These fields never choose a managed project or grant access.
-Changing Helm environment values requires a rollout. Enrollment policy reload is
-handled separately on the Host. The cluster's Infisical bridge refuses all write,
-delete, membership and role commands regardless of cluster RBAC privileges.
+For Colima containerd/k3s, build and deliver the real Agent image into the
+selected profile's Kubernetes-visible `k8s.io` namespace. Verify image content,
+platform, tag and digest there before installation. No direct host files or
+host UID/GID mapping are required. The removed `configFiles` setting is rejected
+so an old overlay cannot silently retain that architecture. Synthetic image
+identities are suitable only for explicit render tests. Host/MCP remains the
+configuration read/edit surface; the optional Host Bridge preserves its
+separately authenticated Doctor path.

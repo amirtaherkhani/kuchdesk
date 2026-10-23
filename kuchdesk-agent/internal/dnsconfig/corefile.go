@@ -23,7 +23,7 @@ type corefileLayout struct {
 	aliases    []Alias
 }
 
-// inspectCorefile accepts the standard KIND CoreDNS server block and refuses
+// inspectCorefile accepts the standard Kubernetes CoreDNS server block and refuses
 // ambiguous or incomplete managed sections before any Kubernetes write.
 func inspectCorefile(corefile, clusterDomain string) (corefileLayout, error) {
 	if corefile == "" || len(corefile) > maxCorefileBytes {
@@ -87,7 +87,7 @@ func inspectCorefile(corefile, clusterDomain string) (corefileLayout, error) {
 		offset += len(line)
 	}
 	if !rootFound || depth != 0 || !hasKubernetes || !hasReload {
-		return corefileLayout{}, fmt.Errorf("%w: KIND .:53 server block with kubernetes and reload is required", ErrUnavailable)
+		return corefileLayout{}, fmt.Errorf("%w: .:53 server block with kubernetes and reload is required", ErrUnavailable)
 	}
 	if (layout.blockStart < 0) != (layout.blockEnd < 0) {
 		return corefileLayout{}, fmt.Errorf("%w: incomplete managed block", ErrUnmanaged)
@@ -172,7 +172,7 @@ func validateAliasDirectives(rendered string) error {
 	return err
 }
 
-// Corefile syntax has already been parsed; this finds the KIND block boundary
+// Corefile syntax has already been parsed; this finds the root block boundary
 // while ignoring braces in comments and quoted arguments. Unknown layouts fail closed.
 func corefileBraceDelta(line string) int {
 	delta := 0

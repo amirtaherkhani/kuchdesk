@@ -312,7 +312,7 @@
     },
     {
       "id": 8,
-      "title": "Docker host DNS",
+      "title": "K3s CoreDNS site zone",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -327,7 +327,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "probe_success{job=\"docker-host-site-dns\"}",
+          "expr": "probe_success{job=\"coredns-site-dns\"}",
           "editorMode": "code",
           "instant": true
         }

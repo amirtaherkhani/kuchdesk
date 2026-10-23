@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -15,8 +14,7 @@ import (
 	"time"
 )
 
-// Client relays two bounded, typed host commands. The cluster holds only a
-// dedicated bridge bearer, never Infisical's Universal Auth credentials.
+// Client relays the bounded Doctor command with a dedicated bridge bearer.
 type Client struct {
 	base  *url.URL
 	token string
@@ -57,8 +55,6 @@ func New(rawURL, token, caFile string) (*Client, error) {
 func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := ""
 	switch r.URL.Path {
-	case "/v1/host/infisical/commands":
-		path = "/v1/infisical/commands"
 	case "/v1/host/doctor":
 		path = "/v1/doctor"
 	default:
@@ -73,21 +69,6 @@ func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil || len(body) > 64<<10 {
 		http.Error(w, "invalid_request", http.StatusBadRequest)
 		return
-	}
-	if path == "/v1/infisical/commands" {
-		var command struct {
-			Operation string `json:"operation"`
-		}
-		if json.Unmarshal(body, &command) != nil {
-			http.Error(w, "invalid_request", http.StatusBadRequest)
-			return
-		}
-		switch command.Operation {
-		case "project.list", "project.get", "environment.list", "folder.list", "secret.list", "secret.get":
-		default:
-			http.Error(w, "read_only_bridge", http.StatusForbidden)
-			return
-		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 	defer cancel()

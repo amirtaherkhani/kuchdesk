@@ -11,7 +11,7 @@ import (
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 )
 
-const kindCorefile = `.:53 {
+const k3sCorefile = `.:53 {
     errors
     health {
        lameduck 5s
@@ -21,6 +21,11 @@ const kindCorefile = `.:53 {
         pods insecure
         fallthrough in-addr.arpa ip6.arpa
         ttl 30
+    }
+    hosts /etc/coredns/NodeHosts {
+        ttl 60
+        reload 15s
+        fallthrough
     }
     prometheus :9153
     forward . /etc/resolv.conf {
@@ -47,7 +52,7 @@ func TestManagerReplacesServiceAliasesWithOptimisticConcurrency(t *testing.T) {
 				Namespace:       "kube-system",
 				ResourceVersion: "12",
 			},
-			Data: map[string]string{"Corefile": kindCorefile},
+			Data: map[string]string{"Corefile": k3sCorefile},
 		},
 	)
 	manager := New(kube, Options{
@@ -90,7 +95,7 @@ func TestManagerReplacesServiceAliasesWithOptimisticConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Data["Corefile"] != kindCorefile {
+	if stored.Data["Corefile"] != k3sCorefile {
 		t.Fatalf("dry run changed ConfigMap: %#v", stored.Data)
 	}
 
@@ -121,14 +126,14 @@ func TestManagerReplacesServiceAliasesWithOptimisticConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err = kube.CoreV1().ConfigMaps("kube-system").Get(ctx, "coredns", metav1.GetOptions{})
-	if err != nil || stored.Data["Corefile"] != kindCorefile {
+	if err != nil || stored.Data["Corefile"] != k3sCorefile {
 		t.Fatalf("removal did not restore Corefile: %q, %v", stored.Data["Corefile"], err)
 	}
 }
 
 func TestManagerRejectsUnmanagedRewriteAndLeavesCorefileUntouched(t *testing.T) {
 	t.Parallel()
-	corefile := strings.Replace(kindCorefile, "    errors", "    rewrite stop name exact api.home.arpa api.apps.svc.cluster.local\n    errors", 1)
+	corefile := strings.Replace(k3sCorefile, "    errors", "    rewrite stop name exact api.home.arpa api.apps.svc.cluster.local\n    errors", 1)
 	kube := kubernetesfake.NewSimpleClientset(
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps"}},
 		&corev1.ConfigMap{
@@ -155,9 +160,9 @@ func TestCorefileRequiresSafeKindLayout(t *testing.T) {
 		want     error
 	}{
 		{"missing Corefile", "", ErrUnavailable},
-		{"missing reload", strings.Replace(kindCorefile, "    reload\n", "", 1), ErrUnavailable},
-		{"duplicate root", kindCorefile + kindCorefile, ErrUnavailable},
-		{"incomplete managed block", strings.Replace(kindCorefile, "    errors", "    "+managedStart+"\n    errors", 1), ErrUnmanaged},
+		{"missing reload", strings.Replace(k3sCorefile, "    reload\n", "", 1), ErrUnavailable},
+		{"duplicate root", k3sCorefile + k3sCorefile, ErrUnavailable},
+		{"incomplete managed block", strings.Replace(k3sCorefile, "    errors", "    "+managedStart+"\n    errors", 1), ErrUnmanaged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := inspectCorefile(tc.corefile, "cluster.local"); !errors.Is(err, tc.want) {
@@ -178,7 +183,7 @@ func TestManagerRejectsUnsafeOrStaleAliases(t *testing.T) {
 				Namespace:       "kube-system",
 				ResourceVersion: "21",
 			},
-			Data: map[string]string{"Corefile": kindCorefile},
+			Data: map[string]string{"Corefile": k3sCorefile},
 		},
 	)
 	manager := New(kube, Options{
@@ -239,7 +244,7 @@ func TestManagerDoesNotOverwriteUnmanagedCorefile(t *testing.T) {
 				ResourceVersion: "4",
 			},
 			Data: map[string]string{
-				"Corefile": kindCorefile + "    " + managedStart + "\n",
+				"Corefile": k3sCorefile + "    " + managedStart + "\n",
 			},
 		},
 	)

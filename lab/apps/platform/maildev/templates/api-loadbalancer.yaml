@@ -1,0 +1,16 @@
+{{- if .Values.apiPublish.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.apiPublish.serviceName }}
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: finance-maildev
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: web
+      port: {{ .Values.apiPublish.port }}
+      targetPort: web
+      protocol: TCP
+{{- end }}

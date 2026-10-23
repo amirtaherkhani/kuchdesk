@@ -1,5 +1,7 @@
 # Namespace organization proposal
 
+> Historical proposal from 2026-10-10. Secret-manager and identity sections below are superseded by the direct YAML configuration. They are retained only as dated migration evidence and must not be used as deployment instructions.
+
 Status: architecture/proposal only. Inventory observed on 2026-10-10; the approved k6-only stage is complete as recorded below. Other migrations, shared database deployment and new credential provisioning remain proposals.
 
 The retained functional groups are `observability`, `platform-secrets`, `platform-tools`, `platform-networking` and `platform-tests`. Use **`platform-databases`** for proposed shared PostgreSQL and future database services, and **`platform-messaging`** for NATS, RabbitMQ, Kafka and similar brokers. Redis belongs with the function it actually serves; its proposed shared-service placement is not yet a deployed fact. Kubedesk Platform owns these seven shared infrastructure groups. Each independent managed project has its own Infisical project and dedicated configurable Kubernetes namespace, separate from the platform groups. No namespace prefix is mandatory; no namespace is created automatically by Infisical discovery.

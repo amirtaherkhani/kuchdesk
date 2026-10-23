@@ -2,13 +2,13 @@
 
 FROM golang:1.26.2-alpine AS builder
 
-WORKDIR /src
+WORKDIR /src/kuchdesk-agent
 
-COPY go.mod go.sum ./
+COPY kuchdesk-agent/go.mod kuchdesk-agent/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-COPY . .
+COPY kuchdesk-agent .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build \

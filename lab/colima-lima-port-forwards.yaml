@@ -1,0 +1,52 @@
+# Sole-profile override for kuchdesk-fresh. Rules precede Colima's catchalls.
+# Lima forwards discovered listeners only; this does not reserve Mac ports.
+portForwards:
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [20000, 20099]
+    hostIP: "127.0.0.1"
+    hostPortRange: [20000, 20099]
+    proto: tcp
+  # Preserve only the existing verified management listeners on Mac loopback.
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [9100, 9100]
+    hostIP: "127.0.0.1"
+    hostPortRange: [9100, 9100]
+    proto: tcp
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [10248, 10250]
+    hostIP: "127.0.0.1"
+    hostPortRange: [10248, 10250]
+    proto: tcp
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [10256, 10259]
+    hostIP: "127.0.0.1"
+    hostPortRange: [10256, 10259]
+    proto: tcp
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [42445, 42445]
+    hostIP: "127.0.0.1"
+    hostPortRange: [42445, 42445]
+    proto: tcp
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [56076, 56077]
+    hostIP: "127.0.0.1"
+    hostPortRange: [56076, 56077]
+    proto: tcp
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [20000, 20099]
+    hostIP: "127.0.0.1"
+    hostPortRange: [20000, 20099]
+    proto: udp
+  # Match wildcard and loopback, IPv4 and IPv6, before generated TCP/UDP rules.
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [1, 65535]
+    proto: any
+    ignore: true

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/localruntime"
 	"net"
 	"net/http"
 	"net/url"
@@ -78,16 +79,21 @@ func (c Config) Validate() error {
 	if !validDomain(c.Domain) || !identifier.MatchString(c.KubeContext) || !filepath.IsAbs(c.DiskPath) {
 		return errors.New("domain, Kubernetes context, and absolute disk path are required")
 	}
-	u, err := url.Parse(c.RegistryURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return errors.New("registry URL must be an HTTP origin without credentials")
+	if _, err := localruntime.Profile(c.KubeContext); err != nil {
+		return err
 	}
-	if u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1" {
-		return errors.New("registry URL must use host loopback")
-	}
-	port, err := strconv.Atoi(u.Port())
-	if err != nil || port < 1 || port > 65535 {
-		return errors.New("registry URL requires a valid explicit port")
+	if c.RegistryURL != "" {
+		u, err := url.Parse(c.RegistryURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			return errors.New("registry URL must be an HTTP origin without credentials")
+		}
+		if u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1" {
+			return errors.New("registry URL must use host loopback")
+		}
+		port, err := strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return errors.New("registry URL requires a valid explicit port")
+		}
 	}
 	if len(c.Services) > 16 {
 		return errors.New("at most 16 deployment checks are supported")
@@ -198,7 +204,7 @@ func (execRunner) Output(ctx context.Context, name string, args ...string) ([]by
 func filteredEnvironment() []string {
 	var result []string
 	for _, item := range os.Environ() {
-		if strings.HasPrefix(item, "INFISICAL_CLIENT_ID=") || strings.HasPrefix(item, "INFISICAL_CLIENT_SECRET=") || strings.HasPrefix(item, "KUCHDESK_AGENT_TOKEN=") {
+		if strings.HasPrefix(item, "KUCHDESK_HOST_BRIDGE_TOKEN=") || strings.HasPrefix(item, "KUCHDESK_AGENT_TOKEN=") {
 			continue
 		}
 		result = append(result, item)
@@ -247,15 +253,18 @@ func (s Service) Run(ctx context.Context, config Config) (Report, error) {
 	tasks := []task{
 		{"network", "host-network", "route", "macos", nil, func(ctx context.Context) Check { return s.network(ctx) }},
 		{"dns", "host-dns", "system-resolver", "macos", []string{"network"}, func(ctx context.Context) Check { return s.dns(ctx, config.Domain) }},
-		{"docker", "docker", "docker-info", "macos", nil, func(ctx context.Context) Check { return s.docker(ctx) }},
-		{"kind", "kubernetes", "kubectl-get-nodes", config.KubeContext, []string{"docker"}, func(ctx context.Context) Check { return s.kind(ctx, config.KubeContext) }},
-		{"registry", "registry", "registry-http", "loopback", []string{"docker", "kind"}, func(ctx context.Context) Check { return s.registry(ctx, config.RegistryURL) }},
+		{"colima", "colima", "colima-status", config.KubeContext, nil, func(ctx context.Context) Check { return s.colima(ctx, config.KubeContext) }},
+		{"containerd", "containerd", "colima-nerdctl-info", config.KubeContext, []string{"colima"}, func(ctx context.Context) Check { return s.containerd(ctx, config.KubeContext) }},
+		{"kubernetes", "kubernetes", "kubectl-get-nodes", config.KubeContext, []string{"containerd"}, func(ctx context.Context) Check { return s.kubernetes(ctx, config.KubeContext) }},
 		{"disk", "storage", "statfs", "macos", nil, func(context.Context) Check { return s.disk(config.DiskPath, config.MinFreeBytes) }},
-		{"resources", "kubernetes-resources", "kubectl-top-nodes", config.KubeContext, []string{"kind"}, func(ctx context.Context) Check { return s.metrics(ctx, config.KubeContext) }},
+		{"resources", "kubernetes-resources", "kubectl-top-nodes", config.KubeContext, []string{"kubernetes"}, func(ctx context.Context) Check { return s.metrics(ctx, config.KubeContext) }},
+	}
+	if config.RegistryURL != "" {
+		tasks = append(tasks, task{"registry", "registry", "registry-http", "loopback", []string{"containerd", "kubernetes"}, func(ctx context.Context) Check { return s.registry(ctx, config.RegistryURL) }})
 	}
 	for _, target := range config.Services {
 		target := target
-		tasks = append(tasks, task{"service:" + target.Namespace + "/" + target.Deployment, "deployment", "kubectl-get-deployment", config.KubeContext, []string{"kind"}, func(ctx context.Context) Check { return s.deployment(ctx, config.KubeContext, target) }})
+		tasks = append(tasks, task{"service:" + target.Namespace + "/" + target.Deployment, "deployment", "kubectl-get-deployment", config.KubeContext, []string{"kubernetes"}, func(ctx context.Context) Check { return s.deployment(ctx, config.KubeContext, target) }})
 	}
 	checks := make([]Check, len(tasks))
 	gate := make(chan struct{}, 4)
@@ -359,24 +368,44 @@ func (s Service) dns(ctx context.Context, domain string) Check {
 	return ok("dns", "Configured domain resolves", map[string]any{"answerCount": len(addresses)})
 }
 
-func (s Service) docker(ctx context.Context) Check {
-	raw, err := s.Commands.Output(ctx, "docker", "info", "--format", "{{.ServerVersion}}")
-	version := strings.TrimSpace(string(raw))
-	if err != nil || !versionName.MatchString(version) {
-		check := failure("docker", "Docker daemon unavailable", "Start Docker Desktop and check the selected context")
-		check.ErrorClass, check.ExitCode = "command_failed", commandExitCode(err)
+func (s Service) colima(ctx context.Context, kubeContext string) Check {
+	profile, err := localruntime.Profile(kubeContext)
+	if err != nil {
+		return failure("colima", "Colima context invalid", "Select an explicit Colima context")
+	}
+	if _, err := s.Commands.Output(ctx, "colima", "--profile", profile, "status"); err != nil {
+		return failure("colima", "Colima profile is not running", "Start the approved profile only after deployment authorization")
+	}
+	return ok("colima", "Selected Colima profile is running", map[string]any{"profile": profile})
+}
+
+func (s Service) containerd(ctx context.Context, kubeContext string) Check {
+	profile, _ := localruntime.Profile(kubeContext)
+	raw, err := s.Commands.Output(ctx, "colima", "--profile", profile, "nerdctl", "--", "--namespace", "k8s.io", "info", "--format", "{{json .}}")
+	var info struct {
+		Driver        string `json:"Driver"`
+		ServerVersion string `json:"ServerVersion"`
+	}
+	if err != nil || len(raw) > maxCommandOutput || json.Unmarshal(raw, &info) != nil || info.Driver == "" || !versionName.MatchString(info.ServerVersion) {
+		check := failure("containerd", "Selected Colima containerd store unavailable", "Check the containerd runtime in the approved Colima profile")
+		check.ErrorClass, check.ExitCode = "command_or_parse_failed", commandExitCode(err)
 		return check
 	}
-	check := ok("docker", "Docker daemon responds", map[string]any{"serverVersion": version})
-	check.Version = version
+	check := ok("containerd", "Selected Colima containerd k8s.io store responds", map[string]any{"serverVersion": info.ServerVersion, "namespace": "k8s.io"})
+	check.Version = info.ServerVersion
 	return check
 }
 
-func (s Service) kind(ctx context.Context, kubeContext string) Check {
+func (s Service) kubernetes(ctx context.Context, kubeContext string) Check {
 	raw, err := s.Commands.Output(ctx, "kubectl", "--context", kubeContext, "get", "nodes", "-o", "json")
 	var body struct {
 		Items []struct {
 			Status struct {
+				NodeInfo struct {
+					KubeletVersion          string `json:"kubeletVersion"`
+					ContainerRuntimeVersion string `json:"containerRuntimeVersion"`
+					MachineID               string `json:"machineID"`
+				} `json:"nodeInfo"`
 				Conditions []struct {
 					Type   string `json:"type"`
 					Status string `json:"status"`
@@ -385,12 +414,20 @@ func (s Service) kind(ctx context.Context, kubeContext string) Check {
 		} `json:"items"`
 	}
 	if err != nil || len(raw) > maxCommandOutput || json.Unmarshal(raw, &body) != nil || len(body.Items) == 0 {
-		check := failure("kind", "Kubernetes nodes unavailable", "Check Docker Desktop Kubernetes and the selected context")
+		check := failure("kubernetes", "Kubernetes nodes unavailable", "Check the selected Kubernetes context")
 		check.ErrorClass, check.ExitCode = "command_or_parse_failed", commandExitCode(err)
 		return check
 	}
 	ready := 0
+	profile, _ := localruntime.Profile(kubeContext)
+	machine, machineErr := s.Commands.Output(ctx, "colima", "--profile", profile, "ssh", "--", "cat", "/etc/machine-id")
+	if machineErr != nil || strings.TrimSpace(string(machine)) == "" || len(body.Items) != 1 || body.Items[0].Status.NodeInfo.MachineID != strings.TrimSpace(string(machine)) {
+		return failure("kubernetes", "Kubernetes context does not identify the selected single-node Colima VM", "Verify the context and VM identity before deployment")
+	}
 	for _, node := range body.Items {
+		if !strings.Contains(node.Status.NodeInfo.KubeletVersion, "+k3s") || !strings.HasPrefix(node.Status.NodeInfo.ContainerRuntimeVersion, "containerd://") {
+			return failure("kubernetes", "Selected cluster is not K3s with Colima containerd runtime", "Use the dedicated Colima containerd/K3s profile")
+		}
 		for _, condition := range node.Status.Conditions {
 			if condition.Type == "Ready" && condition.Status == "True" {
 				ready++
@@ -400,9 +437,9 @@ func (s Service) kind(ctx context.Context, kubeContext string) Check {
 	}
 	evidence := map[string]any{"nodes": len(body.Items), "readyNodes": ready}
 	if ready != len(body.Items) {
-		return Check{ID: "kind", Status: "fail", Message: "Kubernetes has unready nodes", Evidence: evidence, Recommendation: "Inspect node conditions before deployment", ErrorClass: "node_unready"}
+		return Check{ID: "kubernetes", Status: "fail", Message: "Kubernetes has unready nodes", Evidence: evidence, Recommendation: "Inspect node conditions before deployment", ErrorClass: "node_unready"}
 	}
-	return ok("kind", "Kubernetes nodes ready", evidence)
+	return ok("kubernetes", "Kubernetes nodes ready", evidence)
 }
 
 func (s Service) registry(ctx context.Context, origin string) Check {

@@ -1,0 +1,37 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    api:
+      dashboard: false
+    ingressClass:
+      enabled: true
+      isDefaultClass: false
+    ports:
+      maildevapi:
+        port: 20002
+        exposedPort: 20002
+        protocol: TCP
+        expose:
+          default: false
+      web:
+        redirections:
+          entryPoint:
+            to: websecure
+            scheme: https
+            permanent: true
+    providers:
+      kubernetesCRD:
+        enabled: true
+        allowCrossNamespace: false
+      kubernetesIngress:
+        enabled: true
+    service:
+      type: LoadBalancer
+      spec:
+        externalTrafficPolicy: Local
+        # Kubernetes requires this VM health listener for Local LoadBalancer Services.
+        healthCheckNodePort: 30689

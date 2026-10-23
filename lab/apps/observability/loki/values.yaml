@@ -79,3 +79,12 @@ lokiCanary:
 
 test:
   enabled: false
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
+    interval: 30s
+    scrapeTimeout: 10s
+    metricsInstance:
+      enabled: false

@@ -1,0 +1,25 @@
+image: docker.io/maildev/maildev:2.2.1@sha256:180ef51f65eefebb0e7122d8308813c1fd7bff164bc440ce5a3c2feee167a810
+smtpPort: 1025
+webPort: 1080
+smtpPublish:
+  enabled: true
+  serviceName: finance-maildev-smtp
+  port: 20001
+  sourceRanges:
+    - 127.0.0.1/32
+    - 192.168.64.1/32
+    - 192.168.64.15/32
+    - 192.168.5.1/32
+    - 10.4.0.0/24
+    - 10.42.0.0/24
+apiPublish:
+  enabled: false
+  serviceName: finance-maildev-api
+  port: 20002
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi

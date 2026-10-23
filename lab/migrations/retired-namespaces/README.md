@@ -31,7 +31,7 @@ delete or finalizer removal was used. The expected owned-CertificateRequest
 
 The [Grafana profile](../../apps/observability/grafana/README.md) records native
 auth for this homelab; portable development and explicit Universal Auth remain
-supported. The [operator policy](../../apps/platform/infisical-operator/README.md)
+supported. The retired operator policy
 records empty manager TokenRequest grants; the dedicated live reader grant is
 separate and is not recreated by this source reconciliation.
 

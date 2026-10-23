@@ -5,7 +5,6 @@ metadata:
   name: {{ include "grafana.fullname" . }}
   namespace: {{ include "grafana.namespace" . }}
   annotations:
-    secrets.infisical.com/auto-reload: "true"
     {{- with .Values.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

@@ -572,7 +572,7 @@ admin:
   ## Name of the secret. Can be templated.
   existingSecret: ""
   userKey: admin-user
-  passwordKey: GRAFANA_ADMIN_PASSWORD
+  passwordKey: admin-password
 
 ## Define command to be executed at startup by grafana container
 ## Needed if using `vault-env` to manage secrets (ref: https://banzaicloud.com/blog/inject-secrets-into-pods-vault/)

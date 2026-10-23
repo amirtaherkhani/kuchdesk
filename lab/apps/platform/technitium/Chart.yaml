@@ -1,0 +1,6 @@
+apiVersion: v2
+name: technitium
+description: Fresh local Technitium DNS service
+type: application
+version: 0.1.0
+appVersion: 15.5.1

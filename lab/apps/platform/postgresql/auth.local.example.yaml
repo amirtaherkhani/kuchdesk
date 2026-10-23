@@ -1,0 +1,9 @@
+# Copy to ignored auth.local.yaml with mode0600; values are supplied via Secret, never Helm.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-auth
+  namespace: platform-storage
+type: Opaque
+stringData:
+  DATABASE_PASSWORD: REPLACE_WITH_FRESH_RANDOM_PASSWORD

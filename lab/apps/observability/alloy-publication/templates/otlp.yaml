@@ -1,0 +1,34 @@
+{{- $http := index .Values.services "alloy-otlp-http" -}}
+{{- $grpc := index .Values.services "alloy-otlp-grpc" -}}
+{{- if and $http.enabled $grpc.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: alloy-otlp
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/instance: alloy
+  annotations:
+    meta.helm.sh/release-name: alloy-publication
+    meta.helm.sh/release-namespace: observability
+spec:
+  type: LoadBalancer
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Cluster
+  loadBalancerSourceRanges:
+{{ toYaml .Values.sourceRanges | indent 4 }}
+  selector:
+    app.kubernetes.io/instance: alloy
+    app.kubernetes.io/name: alloy
+  ports:
+    - name: otlp-http
+      protocol: TCP
+      port: {{ $http.publishedPort }}
+      targetPort: {{ $http.backendPort }}
+    - name: otlp-grpc
+      protocol: TCP
+      appProtocol: h2c
+      port: {{ $grpc.publishedPort }}
+      targetPort: {{ $grpc.backendPort }}
+{{- end }}

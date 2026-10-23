@@ -1,0 +1,98 @@
+# Official nats chart 2.15.1; local development only, one replica, no application TLS.
+fullnameOverride: nats
+config:
+  jetstream:
+    enabled: true
+    fileStore:
+      pvc:
+        size: 6Gi
+        storageClassName: local-path
+      maxSize: 4Gi
+  merge:
+    accounts:
+      FINANCE:
+        jetstream: enabled
+        users:
+          - user: finance-internal-events
+            password: "<< $NATS_FINANCE_PASSWORD >>"
+            permissions:
+              publish:
+                allow:
+                  - vv.finance.internal.>
+                  - vv.finance.internal-dlq.>
+                  - $JS.API.INFO
+                  - $JS.API.STREAM.INFO.VV_FINANCE_INTERNAL_EVENTS
+                  - $JS.API.STREAM.INFO.VV_FINANCE_INTERNAL_EVENTS_DLQ
+                  - $JS.API.CONSUMER.INFO.VV_FINANCE_INTERNAL_EVENTS.>
+                  - $JS.API.CONSUMER.CREATE.VV_FINANCE_INTERNAL_EVENTS.>
+                  - $JS.API.CONSUMER.MSG.NEXT.VV_FINANCE_INTERNAL_EVENTS.>
+                  - $JS.API.STREAM.MSG.GET.VV_FINANCE_INTERNAL_EVENTS_DLQ
+                  - $JS.ACK.VV_FINANCE_INTERNAL_EVENTS.>
+              subscribe:
+                allow: [_INBOX.>]
+container:
+  image:
+    repository: nats
+    tag: 2.15.1-alpine
+    digest: sha256:2ae57dfba3063d5e25fecb75256118c0882a1a2d2cf7d0fba17a7c701df956f6
+  env:
+    NATS_FINANCE_PASSWORD:
+      valueFrom:
+        secretKeyRef: {name: nats-auth, key: finance-password}
+  resources:
+    requests: {cpu: 250m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+reloader:
+  image:
+    digest: sha256:c35d7433cbb9a87ffe1122d1ba845c06cf5cac60e5d49aed3758b15cb40092fe
+natsBox:
+  enabled: false
+service:
+  name: nats
+  merge:
+    spec:
+      type: ClusterIP
+extraResources:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: nats-public
+      labels:
+        app.kubernetes.io/name: nats
+        app.kubernetes.io/instance: nats
+    spec:
+      type: LoadBalancer
+      selector:
+        app.kubernetes.io/component: nats
+        app.kubernetes.io/instance: nats
+        app.kubernetes.io/name: nats
+      ports:
+        - name: nats
+          port: 20000
+          targetPort: nats
+          protocol: TCP
+promExporter:
+  enabled: true
+  merge:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  podMonitor:
+    enabled: true
+    merge:
+      metadata:
+        labels:
+          release: monitoring
+      spec:
+        podMetricsEndpoints:
+          - port: prom-metrics
+            interval: 30s
+            scrapeTimeout: 10s
+  image:
+    repository: natsio/prometheus-nats-exporter
+    tag: 0.20.2
+    digest: sha256:c623b608e148e31e1c1c878673a197f1828e58ce90de4f01d22f1baa84c8fee9

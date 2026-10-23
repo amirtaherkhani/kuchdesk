@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+data:
+  rabbitmq.conf: |
+    listeners.tcp.default = 5672
+    management.tcp.port = 15672
+    definitions.import_backend = local_filesystem
+    definitions.local.path = /run/rabbitmq-auth/definitions.json
+    definitions.skip_if_unchanged = true
+    vm_memory_high_watermark.absolute = 512MiB
+    disk_free_limit.absolute = 512MiB
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rabbitmq-data
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: {{ .Values.storageClass }}
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: cookie-permissions
+          image: {{ .Values.image }}
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec, 'if [ -f /var/lib/rabbitmq/.erlang.cookie ]; then chmod 0600 /var/lib/rabbitmq/.erlang.cookie; fi']
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/rabbitmq}
+      containers:
+        - name: rabbitmq
+          image: {{ .Values.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.credentialsSecret }}, key: erlang-cookie}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          ports:
+            - {name: amqp, containerPort: 5672}
+            - {name: management, containerPort: 15672}
+          startupProbe:
+            exec: {command: [rabbitmq-diagnostics, -q, ping]}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec: {command: [rabbitmq-diagnostics, -q, check_running]}
+            periodSeconds: 10
+          livenessProbe:
+            exec: {command: [rabbitmq-diagnostics, -q, ping]}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: '1', memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/rabbitmq}
+            - {name: auth, mountPath: /run/rabbitmq-auth, readOnly: true}
+            - {name: config, mountPath: /etc/rabbitmq/conf.d/20-kuchdesk.conf, subPath: rabbitmq.conf, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: rabbitmq-data}
+        - name: auth
+          secret:
+            secretName: {{ .Values.credentialsSecret }}
+            defaultMode: 0440
+        - name: config
+          configMap: {name: rabbitmq-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+spec:
+  selector:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - {name: amqp, port: 5672, targetPort: 5672}
+    - {name: management, port: 15672, targetPort: 15672}
+---
+{{- if .Values.publication.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-public
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - {name: amqp, protocol: TCP, port: {{ .Values.publication.port }}, targetPort: 5672}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rabbitmq
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports: [{protocol: TCP, port: 5672}]
+  egress: []

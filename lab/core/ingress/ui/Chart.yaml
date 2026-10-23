@@ -1,0 +1,5 @@
+apiVersion: v2
+name: kuchdesk-ui
+description: Protected HTTPS routes for existing KuchDesk UI Services
+type: application
+version: 0.1.0

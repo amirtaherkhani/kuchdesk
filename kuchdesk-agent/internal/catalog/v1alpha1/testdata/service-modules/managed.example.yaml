@@ -33,11 +33,3 @@ components:
       dashboards: []
       metrics: []
       logs: []
-    secretRefs:
-      - provider: infisical
-        projectRef: example-project
-        environmentRef: local
-        path: /example/database
-        secretName: example-database
-        keys:
-          - DATABASE_URL

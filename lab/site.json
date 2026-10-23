@@ -1,8 +1,7 @@
 {
   "domain": "local.dev",
   "hosts": {
-    "grafana": "grafana",
-    "infisical": "infisical"
+    "grafana": "grafana"
   },
   "tls": {
     "secretName": "kubedesk-local-tls",
@@ -12,11 +11,10 @@
       "selfSignedName": "local-dev-selfsigned",
       "caSecretName": "local-dev-ca",
       "caNamespace": "platform-system",
-      "caCommonName": "Home Lab Local Development CA"
+      "caCommonName": "KuchDesk Colima Local Development CA"
     },
     "certificateNamespaces": [
       "platform-system",
-      "platform-secrets",
       "observability",
       "kube-system"
     ],

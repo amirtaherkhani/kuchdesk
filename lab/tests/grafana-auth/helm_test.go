@@ -2,7 +2,6 @@ package grafanaauth_test
 
 import (
 	"os/exec"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -10,81 +9,48 @@ import (
 func render(t *testing.T, template string, extra ...string) (string, error) {
 	return renderWithProfile(t, "values.homelab.yaml", template, extra...)
 }
-
 func renderWithProfile(t *testing.T, profile, template string, extra ...string) (string, error) {
 	t.Helper()
-	helm, e := exec.LookPath("helm")
-	if e != nil {
+	helm, err := exec.LookPath("helm")
+	if err != nil {
 		t.Skip("helm is required for chart contract tests")
 	}
 	args := []string{"template", "grafana", "../../apps/observability/grafana", "-n", "observability", "-f", "../../apps/observability/grafana/" + profile}
 	if template != "" {
 		args = append(args, "--show-only", template)
 	}
-	if profile == "values.development.yaml" {
-		// A portable profile must be paired with that environment's explicit
-		// Infisical selectors. These render-only fixtures are not credentials.
-		for key, value := range map[string]string{"hostAPI": "https://infisical.example.test/api", "credentialsSecretName": "dummy-auth", "credentialsSecretNamespace": "dummy-secrets", "projectSlug": "dummy-project", "envSlug": "dummy-env", "secretsPath": "/apps/observability/grafana"} {
-			args = append(args, "--set-string", "infisical."+key+"="+value)
-		}
-	}
-	out, e := exec.Command(helm, append(args, extra...)...).CombinedOutput()
-	return string(out), e
-}
-func nativeArgs() []string {
-	return []string{"--set-string", "infisical.authMethod=kubernetesAuth", "--set-string", "infisical.kubernetesAuth.identityId=11111111-1111-1111-1111-111111111111", "--set-string", "infisical.kubernetesAuth.serviceAccountRef.name=fixture-reader", "--set-string", "infisical.kubernetesAuth.serviceAccountRef.namespace=fixture-namespace"}
+	out, err := exec.Command(helm, append(args, extra...)...).CombinedOutput()
+	return string(out), err
 }
 
-func TestAuthenticationModesAndUnchangedWorkload(t *testing.T) {
-	universal, e := render(t, "templates/infisicalsecret.yaml", "--set-string", "infisical.authMethod=universalAuth")
-	if e != nil {
-		t.Fatal(e, universal)
+func TestDirectValuesCreateGrafanaAdminSecret(t *testing.T) {
+	out, err := render(t, "templates/secret.yaml", "--set-string", "adminUser=fixture_admin", "--set-string", "adminPassword=fixture_password")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(universal, "universalAuth:") || strings.Contains(universal, "kubernetesAuth:") {
-		t.Fatal("explicit Universal Auth option changed")
+	if !strings.Contains(out, "kind: Secret") || !strings.Contains(out, "admin-user:") || !strings.Contains(out, "admin-password:") {
+		t.Fatal("direct values did not create the admin Secret")
 	}
-	native, e := render(t, "templates/infisicalsecret.yaml", nativeArgs()...)
-	if e != nil {
-		t.Fatal(e, native)
+	deployment, err := render(t, "templates/deployment.yaml")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"kind: InfisicalConnection", "kind: InfisicalAuth", "kind: InfisicalStaticSecret", "kind: Secret", "identityId: \"11111111-1111-1111-1111-111111111111\"", "method: kubernetes", "name: \"fixture-reader\"", "namespace: \"fixture-namespace\"", "environmentSlug: \"dev\"", "name: grafana-admin", "creationPolicy: Orphan"} {
-		if !strings.Contains(native, want) {
-			t.Fatalf("missing native contract %q", want)
-		}
-	}
-	for _, forbidden := range []string{"universalAuth:", "credentialsRef:", "infisical-universal-auth", "kind: InfisicalSecret\n", "creationPolicy: Owner", "autoCreateServiceAccountToken:"} {
-		if strings.Contains(native, forbidden) {
-			t.Fatalf("native auth retained %q", forbidden)
-		}
-	}
-	for _, template := range []string{"templates/deployment.yaml", "templates/image-renderer-deployment.yaml"} {
-		before, e := render(t, template, "--set-string", "infisical.authMethod=universalAuth")
-		if e != nil {
-			t.Fatal(e, before)
-		}
-		after, e := render(t, template, nativeArgs()...)
-		if e != nil {
-			t.Fatal(e, after)
-		}
-		if before != after {
-			t.Fatalf("auth cutover changed workload %s", template)
-		}
-	}
-}
-func TestInvalidNativeConfigurationFailsClosed(t *testing.T) {
-	for _, args := range [][]string{
-		{"--set-string", "infisical.authMethod=unknown"},
-		{"--set-string", "infisical.authMethod=kubernetesAuth", "--set-string", "infisical.kubernetesAuth.identityId="},
-		append(nativeArgs(), "--set-string", "infisical.kubernetesAuth.serviceAccountRef.name="),
-		append(nativeArgs(), "--set-string", "infisical.kubernetesAuth.serviceAccountRef.namespace="),
-	} {
-		if out, e := render(t, "templates/infisicalsecret.yaml", args...); e == nil {
-			t.Fatalf("invalid auth accepted: %s", out)
-		}
+	if strings.Contains(deployment, "secrets.infisical.com") {
+		t.Fatal("obsolete reload annotation remains")
 	}
 }
 
-func TestHomelabKeepsApprovedAnonymousEditor(t *testing.T) {
+func TestDirectValuesCreateRendererTokenSecret(t *testing.T) {
+	out, err := render(t, "templates/image-renderer-secret.yaml", "--set-string", "imageRenderer.token=fixture-renderer-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "kind: Secret") || !strings.Contains(out, "token:") {
+		t.Fatal("direct values did not create the renderer Secret")
+	}
+}
+
+func TestFreshHomelabRequiresAuthentication(t *testing.T) {
 	config, err := render(t, "templates/configmap.yaml")
 	if err != nil {
 		t.Fatal(err, config)
@@ -102,9 +68,9 @@ func TestHomelabKeepsApprovedAnonymousEditor(t *testing.T) {
 		}
 	}
 	section := strings.Join(anonymous, "\n")
-	for _, want := range []string{"enabled = true", "org_role = Editor", "org_name = Main Org."} {
+	for _, want := range []string{"enabled = false"} {
 		if !strings.Contains(section, want) {
-			t.Fatalf("normal homelab render loses approved anonymous setting %q: %s", want, section)
+			t.Fatalf("fresh homelab render loses authentication setting %q: %s", want, section)
 		}
 	}
 	if strings.Contains(section, "org_role = Admin") {
@@ -174,7 +140,7 @@ func TestDevelopmentDashboardPollingNeedsNoAdminReload(t *testing.T) {
 			if strings.Contains(deployment, "- name: grafana-sc-dashboard") {
 				t.Fatal("native dashboard watcher must not be duplicated as a regular container")
 			}
-			for _, preserved := range []string{"name: GF_SECURITY_ADMIN_USER", "name: GF_SECURITY_ADMIN_PASSWORD", "key: GRAFANA_ADMIN_USER", "key: GRAFANA_ADMIN_PASSWORD"} {
+			for _, preserved := range []string{"name: GF_SECURITY_ADMIN_USER", "name: GF_SECURITY_ADMIN_PASSWORD", "key: admin-user", "key: admin-password"} {
 				if !strings.Contains(deployment, preserved) {
 					t.Fatalf("Grafana bootstrap mapping changed: %s", preserved)
 				}
@@ -189,93 +155,5 @@ func TestDevelopmentDashboardPollingNeedsNoAdminReload(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Only the secret synchronization resources may change during auth migration.
-func TestNativeMigrationPreservesAllOtherChartResources(t *testing.T) {
-	fixture := []string{"--set-string", "imageRenderer.token=render-only-fixture"}
-	before, err := render(t, "", append([]string{"--set-string", "infisical.authMethod=universalAuth"}, fixture...)...)
-	if err != nil {
-		t.Fatal(err, before)
-	}
-	after, err := render(t, "", append(nativeArgs(), fixture...)...)
-	if err != nil {
-		t.Fatal(err, after)
-	}
-	otherDocuments := func(rendered string) string {
-		var kept []string
-		for _, doc := range strings.Split(rendered, "---\n") {
-			if strings.Contains(doc, "# Source: grafana/templates/infisicalsecret.yaml") {
-				continue
-			}
-			if strings.TrimSpace(doc) != "" {
-				kept = append(kept, strings.TrimSpace(doc))
-			}
-		}
-		sort.Strings(kept)
-		return strings.Join(kept, "\n---\n")
-	}
-	if otherDocuments(before) != otherDocuments(after) {
-		t.Fatal("native auth migration changed another chart resource")
-	}
-	for _, want := range []string{
-		"kind: InfisicalConnection", "kind: InfisicalAuth", "kind: InfisicalStaticSecret",
-		"refreshInterval: 1m", "instantUpdates: false", "serviceAccountTokenAudiences: []",
-		"projectSlug: \"home-lab-nb0-k\"", "environmentSlug: \"dev\"",
-		"secretPath: \"/apps/observability/grafana\"", "creationPolicy: Orphan",
-	} {
-		if !strings.Contains(after, want) {
-			t.Fatalf("missing preserved native contract %q", want)
-		}
-	}
-}
-
-func TestNativeAuthRetainsExplicitAudience(t *testing.T) {
-	out, err := render(t, "templates/infisicalsecret.yaml", append(nativeArgs(), "--set-string", "infisical.kubernetesAuth.serviceAccountTokenAudiences[0]=fixture-audience")...)
-	if err != nil {
-		t.Fatal(err, out)
-	}
-	if !strings.Contains(out, `serviceAccountTokenAudiences: ["fixture-audience"]`) {
-		t.Fatal("explicit TokenRequest audience changed")
-	}
-}
-
-func TestHomelabReaderMatchesCompletedMigration(t *testing.T) {
-	out, err := render(t, "templates/infisicalsecret.yaml")
-	if err != nil {
-		t.Fatal(err, out)
-	}
-	for _, want := range []string{
-		"apiVersion: secrets.infisical.com/v1beta1", "kind: InfisicalStaticSecret",
-		"identityId: \"d05fbb07-7b0c-402a-888d-980b9ac06cde\"",
-		"name: \"kubedesk-infisical-reader\"", "namespace: \"platform-secrets\"",
-		"serviceAccountTokenAudiences: []", "creationPolicy: Orphan",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("homelab loses completed reader contract %q", want)
-		}
-	}
-	for _, forbidden := range []string{"kind: InfisicalSecret\n", "universalAuth:", "credentialsRef:", "development-tools"} {
-		if strings.Contains(out, forbidden) {
-			t.Fatalf("homelab restored retired auth setting %q", forbidden)
-		}
-	}
-}
-
-func TestPortableDevelopmentKeepsUniversalAuthDefault(t *testing.T) {
-	out, err := renderWithProfile(t, "values.development.yaml", "templates/infisicalsecret.yaml")
-	if err != nil {
-		t.Fatal(err, out)
-	}
-	for _, want := range []string{"kind: InfisicalSecret", "universalAuth:", "secretName: \"dummy-auth\"", "projectSlug: \"dummy-project\"", "envSlug: \"dummy-env\""} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("portable development contract missing %q", want)
-		}
-	}
-	for _, forbidden := range []string{"kind: InfisicalAuth", "kubedesk-infisical-reader", "d05fbb07-7b0c-402a-888d-980b9ac06cde", "home-lab-nb0-k"} {
-		if strings.Contains(out, forbidden) {
-			t.Fatalf("portable development inherited homelab identity %q", forbidden)
-		}
 	}
 }

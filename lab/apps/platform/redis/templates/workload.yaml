@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kuchdesk.labels" (list . "redis") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: {{ .Values.storageClass }}
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.redis.storage }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kuchdesk.labels" (list . "redis") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: redis
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kuchdesk.labels" (list . "redis") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      {{- if .Values.monitoringAcl.enabled }}
+      initContainers:
+        - name: merge-monitoring-acl
+          image: {{ .Values.redis.image }}
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              cat /run/redis-auth/users.acl > /run/redis-acl-merged/users.acl
+              printf '\n' >> /run/redis-acl-merged/users.acl
+              cat /run/redis-metrics-acl/users.acl >> /run/redis-acl-merged/users.acl
+              test -s /run/redis-acl-merged/users.acl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          volumeMounts:
+            - { name: acl, mountPath: /run/redis-auth, readOnly: true }
+            - { name: metrics-acl, mountPath: /run/redis-metrics-acl, readOnly: true }
+            - { name: merged-acl, mountPath: /run/redis-acl-merged }
+      {{- end }}
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          imagePullPolicy: IfNotPresent
+          command: [redis-server]
+          args: [--appendonly, 'yes', --protected-mode, 'yes', --aclfile, {{ if .Values.monitoringAcl.enabled }}/run/redis-acl-merged/users.acl{{ else }}/run/redis-auth/users.acl{{ end }}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          ports: [{ name: redis, containerPort: 6379 }]
+          startupProbe:
+            tcpSocket: { port: redis }
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe: { tcpSocket: { port: redis } }
+          livenessProbe: { tcpSocket: { port: redis } }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: '1', memory: 512Mi }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            {{- if .Values.monitoringAcl.enabled }}
+            - { name: merged-acl, mountPath: /run/redis-acl-merged, readOnly: true }
+            {{- else }}
+            - { name: acl, mountPath: /run/redis-auth, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: redis-data }
+        - name: acl
+          secret:
+            secretName: {{ .Values.redis.aclSecret }}
+            defaultMode: 0440
+            items: [{ key: users.acl, path: users.acl }]
+        {{- if .Values.monitoringAcl.enabled }}
+        - name: metrics-acl
+          secret:
+            secretName: {{ .Values.monitoringAcl.secretName }}
+            defaultMode: 0440
+            items: [{ key: users.acl, path: users.acl }]
+        - name: merged-acl
+          emptyDir: { medium: Memory }
+        {{- end }}

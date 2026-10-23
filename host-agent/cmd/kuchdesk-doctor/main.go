@@ -36,7 +36,7 @@ func run(args []string, stdout, stderr io.Writer, service doctor.Service) int {
 	var services targets
 	flags.Var(&services, "service", "deployment to check as namespace/name; repeatable")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *minFreeGiB > 1024 {
-		fmt.Fprintln(stderr, "usage: kuchdesk-doctor -domain name -kube-context context -registry-url http://127.0.0.1:5001 -disk-path /absolute/path [-service namespace/deployment]")
+		fmt.Fprintln(stderr, "usage: kuchdesk-doctor -domain name -kube-context context -disk-path /absolute/path [-registry-url LOOPBACK_ORIGIN] [-service namespace/deployment]")
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

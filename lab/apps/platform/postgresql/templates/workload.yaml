@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kuchdesk.labels" (list . "postgresql") | nindent 4 }}
+data:
+  10-finance.sh: |
+    #!/bin/sh
+    set -eu
+    test -s /run/finance-postgresql/DATABASE_PASSWORD
+    if ! PGOPTIONS='-c log_statement=none -c log_min_error_statement=panic' psql --no-psqlrc --host=/var/run/postgresql --set=ON_ERROR_STOP=1 --username=postgres --dbname=finance >/dev/null 2>&1 <<'SQL'
+    BEGIN;
+    SET LOCAL synchronous_commit = on;
+    SELECT format('CREATE ROLE vero LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', pg_read_file('/run/finance-postgresql/DATABASE_PASSWORD')) \gexec
+    ALTER DATABASE finance OWNER TO vero;
+    ALTER SCHEMA public OWNER TO vero;
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+    ALTER ROLE postgres NOLOGIN PASSWORD NULL;
+    COMMIT;
+    SQL
+    then
+      echo 'Finance PostgreSQL bootstrap failed; values withheld; preserve volume for review' >&2
+      exit 1
+    fi
+    umask 077
+    printf 'finance-bootstrap-v1\n' > "$PGDATA/.finance-bootstrap-complete"
+    sync
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kuchdesk.labels" (list . "postgresql") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: {{ .Values.storageClass }}
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.postgresql.storage }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kuchdesk.labels" (list . "postgresql") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: postgresql
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kuchdesk.labels" (list . "postgresql") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroupChangePolicy: OnRootMismatch
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgresql
+          image: {{ .Values.postgresql.image }}
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              marker="$PGDATA/.finance-bootstrap-complete"
+              if [ ! -e "$PGDATA/PG_VERSION" ] && [ ! -L "$PGDATA/PG_VERSION" ] && [ ! -e "$marker" ] && [ ! -L "$marker" ]; then
+                :
+              elif [ -f "$PGDATA/PG_VERSION" ] && [ ! -L "$PGDATA/PG_VERSION" ] && [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(stat -c '%u:%a' "$marker")" = '70:600' ] && [ "$(cat "$marker")" = 'finance-bootstrap-v1' ] && [ "$(wc -c < "$marker" | tr -d ' ')" = 21 ]; then
+                :
+              else
+                echo 'Finance PostgreSQL initialization incomplete or volume unrecognized; manual review required' >&2
+                exit 1
+              fi
+              exec /usr/local/bin/docker-entrypoint.sh postgres
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: finance
+            - name: POSTGRES_PASSWORD_FILE
+              value: /run/finance-postgresql/DATABASE_PASSWORD
+          ports: [{ name: postgresql, containerPort: 5432 }]
+          startupProbe:
+            exec: { command: [sh, -ec, 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'] }
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            exec: { command: [sh, -ec, 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'] }
+          livenessProbe:
+            exec: { command: [sh, -ec, 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'] }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 1Gi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: credentials, mountPath: /run/finance-postgresql, readOnly: true }
+            - { name: bootstrap, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ .Values.postgresql.credentialsSecret }}
+            defaultMode: 0440
+            items: [{ key: DATABASE_PASSWORD, path: DATABASE_PASSWORD }]
+        - name: bootstrap
+          configMap:
+            name: postgresql-bootstrap
+            defaultMode: 0550
+        - name: data
+          persistentVolumeClaim: { claimName: postgresql-data }

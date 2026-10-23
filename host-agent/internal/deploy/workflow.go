@@ -2,7 +2,6 @@ package deploy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,21 +11,23 @@ import (
 	"regexp"
 	"strings"
 
+	chartvalues "github.com/amirtaherkhani/kuchdesk/configyaml"
 	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/doctor"
+	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/localruntime"
 )
 
 var (
 	namePattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
 	contextPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$`)
 	imagePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]+$`)
-	tagPattern      = regexp.MustCompile(`^git-[0-9a-f]{12}$`)
+	tagPattern      = regexp.MustCompile(`^git-[0-9a-f]{12}(-dirty-[0-9a-f]{12})?$`)
 	platformPattern = regexp.MustCompile(`^linux/(amd64|arm64|arm|386|ppc64le|s390x|riscv64)(/v[0-9]+)?$`)
 	buildArgPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	digestPattern   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // Spec is one explicit, local deployment target. No command or shell string is
-// accepted from the profile; the workflow owns the Docker, Helm, and kubectl
+// accepted from the profile; the workflow owns the nerdctl, Helm, and kubectl
 // argument lists.
 type Spec struct {
 	SourceDir            string            `json:"sourceDir"`
@@ -40,9 +41,6 @@ type Spec struct {
 	Release              string            `json:"release"`
 	Deployment           string            `json:"deployment"`
 	Test                 string            `json:"test"`
-	PushMode             string            `json:"pushMode,omitempty"`
-	HostPushRepo         string            `json:"hostPushRepository,omitempty"`
-	KindPrepull          bool              `json:"kindPrepull,omitempty"`
 	Platform             string            `json:"platform,omitempty"`
 	BuildArgs            map[string]string `json:"buildArgs,omitempty"`
 	ReuseBuild           bool              `json:"reuseBuild,omitempty"`
@@ -53,13 +51,57 @@ type Spec struct {
 }
 
 type Result struct {
-	Image  string `json:"image"`
-	Digest string `json:"digest"`
+	Image        string `json:"image"`
+	Digest       string `json:"digest"`
+	SourceCommit string `json:"sourceCommit"`
+	InputHash    string `json:"inputHash"`
+	Platform     string `json:"platform"`
 }
 
 type Runner interface {
 	Run(context.Context, string, string, ...string) error
 	Output(context.Context, string, string, ...string) ([]byte, error)
+}
+
+type contextRunner struct {
+	Runner
+	context string
+}
+
+func (r contextRunner) Run(ctx context.Context, dir, name string, args ...string) error {
+	if name == "nerdctl" {
+		profile, err := localruntime.Profile(r.context)
+		if err != nil {
+			return err
+		}
+		name, args = "colima", append([]string{"--profile", profile, "nerdctl", "--", "--namespace", "k8s.io"}, args...)
+	}
+	if name == "ctr" {
+		profile, err := localruntime.Profile(r.context)
+		if err != nil {
+			return err
+		}
+		name, args = "colima", append([]string{"--profile", profile, "ssh", "--", "sudo", "ctr", "--namespace", "k8s.io"}, args...)
+	}
+	return r.Runner.Run(ctx, dir, name, args...)
+}
+
+func (r contextRunner) Output(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	if name == "nerdctl" {
+		profile, err := localruntime.Profile(r.context)
+		if err != nil {
+			return nil, err
+		}
+		name, args = "colima", append([]string{"--profile", profile, "nerdctl", "--", "--namespace", "k8s.io"}, args...)
+	}
+	if name == "ctr" {
+		profile, err := localruntime.Profile(r.context)
+		if err != nil {
+			return nil, err
+		}
+		name, args = "colima", append([]string{"--profile", profile, "ssh", "--", "sudo", "ctr", "--namespace", "k8s.io"}, args...)
+	}
+	return r.Runner.Output(ctx, dir, name, args...)
 }
 
 type Preflight interface {
@@ -87,7 +129,7 @@ func (ExecRunner) Output(ctx context.Context, dir, name string, args ...string) 
 func filteredEnvironment() []string {
 	var result []string
 	for _, item := range os.Environ() {
-		if strings.HasPrefix(item, "INFISICAL_CLIENT_ID=") || strings.HasPrefix(item, "INFISICAL_CLIENT_SECRET=") {
+		if strings.HasPrefix(item, "KUCHDESK_AGENT_TOKEN=") || strings.HasPrefix(item, "KUCHDESK_HOST_BRIDGE_TOKEN=") {
 			continue
 		}
 		result = append(result, item)
@@ -96,49 +138,43 @@ func filteredEnvironment() []string {
 }
 
 type Workflow struct {
-	Runner          Runner
-	OnStep          func(string)
-	Preflight       Preflight
-	BuildReceiptDir string // Empty uses the current user's cache directory.
+	Runner    Runner
+	OnStep    func(string)
+	Preflight Preflight
 }
 
 func (s Spec) Validate() error {
+	if s.ChartDir == filepath.Join(s.SourceDir, "kuchdesk-agent/chart") {
+		expected := []string{filepath.Join(s.ChartDir, "values.yaml"), filepath.Join(s.ChartDir, "values.local.yaml")}
+		if len(s.ValuesFiles) != len(expected) || s.ValuesFiles[0] != expected[0] || s.ValuesFiles[1] != expected[1] {
+			return errors.New("Agent deployment requires its canonical base and private local YAML files")
+		}
+	}
 	if !namePattern.MatchString(s.Namespace) || !namePattern.MatchString(s.Release) || !namePattern.MatchString(s.Deployment) || !contextPattern.MatchString(s.KubeContext) {
 		return errors.New("namespace, release, deployment, and Kubernetes context are required")
 	}
 	if !imagePattern.MatchString(s.ImageRepository) || !tagPattern.MatchString(s.ImageTag) || strings.HasSuffix(s.ImageRepository, ":") {
 		return errors.New("image repository and immutable git tag are required")
 	}
-	if s.Platform != "" && !platformPattern.MatchString(s.Platform) {
+	if !platformPattern.MatchString(s.Platform) {
 		return errors.New("platform must name one explicit Linux OS/architecture[/variant]")
+	}
+	if s.ReuseBuild {
+		return errors.New("containerd build reuse is unsupported without verified store provenance; set reuseBuild=false")
 	}
 	for key, value := range s.BuildArgs {
 		if !buildArgPattern.MatchString(key) || strings.ContainsRune(value, '\x00') {
 			return errors.New("build argument name or value invalid")
 		}
 	}
-	if s.PushMode != "" && s.PushMode != "docker" && s.PushMode != "host-crane" {
-		return errors.New("pushMode must be docker or host-crane")
-	}
-	if s.PushMode == "host-crane" {
-		parts := strings.SplitN(s.HostPushRepo, "/", 2)
-		if len(parts) != 2 || (parts[0] != "127.0.0.1:5001" && parts[0] != "localhost:5001") || !imagePattern.MatchString(s.HostPushRepo) || parts[1] != repositoryPath(s.ImageRepository) {
-			return errors.New("hostPushRepository must use loopback port 5001 and the same image repository path")
-		}
-	} else if s.HostPushRepo != "" {
-		return errors.New("hostPushRepository requires pushMode=host-crane")
-	}
-	if s.KindPrepull && !(strings.HasPrefix(s.ImageRepository, "localhost:5001/") || strings.HasPrefix(s.ImageRepository, "127.0.0.1:5001/")) {
-		return errors.New("kindPrepull requires a node-local HTTP registry on port 5001")
+	if _, err := localruntime.Profile(s.KubeContext); err != nil {
+		return err
 	}
 	if s.Test != "" && s.Test != "go" {
 		return errors.New("only test=go or no test is supported")
 	}
 	if err := (doctor.Config{Domain: s.PreflightDomain, KubeContext: s.KubeContext, RegistryURL: s.PreflightRegistryURL, DiskPath: s.SourceDir}).Validate(); err != nil {
 		return fmt.Errorf("preflight configuration invalid: %w", err)
-	}
-	if s.PushMode == "host-crane" && s.PreflightRegistryURL != "http://127.0.0.1:5001" && s.PreflightRegistryURL != "http://localhost:5001" {
-		return errors.New("host-crane preflight must check the local registry on port 5001")
 	}
 	for _, path := range []string{s.SourceDir, s.Dockerfile, s.ChartDir} {
 		if !filepath.IsAbs(path) {
@@ -179,36 +215,17 @@ func (s Spec) Plan() ([]string, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	steps := []string{"doctor preflight", "validate profile and source revision", "helm lint"}
+	steps := []string{"doctor preflight", "validate profile and source revision", "verify Helm 4"}
 	if s.Test == "go" {
 		steps = append(steps, "go test")
 	}
 	steps = append(steps, "check local immutable image tag")
-	if s.ReuseBuild {
-		steps = append(steps, "reuse eligible Docker build or docker build --pull")
-	} else {
-		steps = append(steps, "docker build --pull")
-	}
+	steps = append(steps, "nerdctl build --pull")
 	if s.Rebuild || s.RefreshImages {
 		steps[len(steps)-1] += " --no-cache"
 	}
-	if s.PushMode == "host-crane" {
-		steps = append(steps, "docker save", "crane push", "crane digest")
-	} else {
-		steps = append(steps, "docker push", "resolve image digest")
-	}
-	if s.KindPrepull {
-		steps = append(steps, "discover KIND nodes", "fetch digest through KIND containerd", "register digest with KIND CRI")
-	}
-	return append(steps, "helm template", "helm upgrade --install --atomic --wait", "kubectl rollout status"), nil
-}
-
-func repositoryPath(repository string) string {
-	parts := strings.SplitN(repository, "/", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	return parts[1]
+	steps = append(steps, "resolve containerd manifest digest and verify platform/content")
+	return append(steps, "helm lint", "helm template", "helm upgrade --install --rollback-on-failure --wait", "kubectl rollout status"), nil
 }
 
 // Check runs the same read-only guard used by Apply, without building or
@@ -248,22 +265,21 @@ func (w Workflow) Apply(ctx context.Context, s Spec) (Result, error) {
 	if _, err := w.Check(ctx, s); err != nil {
 		return Result{}, err
 	}
+	w.Runner = contextRunner{Runner: w.Runner, context: s.KubeContext}
 	w.progress("validate profile and source revision")
-	// A git tag must identify exactly the clean source being built.
-	revision, err := w.Runner.Output(ctx, s.SourceDir, "git", "rev-parse", "--short=12", "HEAD")
-	if err != nil || s.ImageTag != "git-"+strings.TrimSpace(string(revision)) {
-		return Result{}, errors.New("image tag must match the source HEAD")
-	}
-	changed, err := w.Runner.Output(ctx, s.SourceDir, "git", "status", "--porcelain", "--untracked-files=all", "--", ".")
-	if err != nil || len(strings.TrimSpace(string(changed))) != 0 {
-		return Result{}, errors.New("source has uncommitted or untracked files")
-	}
-	lintValues := append(valuesArgs(s.ValuesFiles), "--set-string", "image.repository="+s.ImageRepository, "--set-string", "image.tag="+s.ImageTag)
-	if err := w.run(ctx, s.SourceDir, "helm lint", "helm", append([]string{"lint", s.ChartDir}, lintValues...)...); err != nil {
+	identity, err := SourceIdentity(ctx, w.Runner, s)
+	if err != nil {
 		return Result{}, err
 	}
+	if s.ImageTag != identity.ImageTag {
+		return Result{}, errors.New("image tag must match the current source/build input identity: " + identity.ImageTag)
+	}
+	helmVersion, err := w.Runner.Output(ctx, s.SourceDir, "helm", "version", "--short")
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(helmVersion)), "v4.") {
+		return Result{}, errors.New("Helm 4 is required before building or deploying")
+	}
 	if s.Test == "go" {
-		if err := w.run(ctx, s.SourceDir, "go test", "go", "test", "./..."); err != nil {
+		if err := w.run(ctx, filepath.Dir(s.Dockerfile), "go test", "go", "test", "./..."); err != nil {
 			return Result{}, err
 		}
 	}
@@ -271,57 +287,30 @@ func (w Workflow) Apply(ctx context.Context, s Spec) (Result, error) {
 	if err := w.buildImage(ctx, s, image); err != nil {
 		return Result{}, err
 	}
-	var digest string
-	if s.PushMode == "host-crane" {
-		archive, err := os.CreateTemp("", "kuchdesk-image-*.tar")
-		if err != nil {
-			return Result{}, errors.New("cannot create temporary image archive")
-		}
-		archive.Close()
-		defer os.Remove(archive.Name())
-		if err := w.run(ctx, s.SourceDir, "docker save", "docker", "save", "--output", archive.Name(), image); err != nil {
-			return Result{}, err
-		}
-		if err := w.run(ctx, s.SourceDir, "crane push", "crane", "push", "--insecure", archive.Name(), s.HostPushRepo+":"+s.ImageTag); err != nil {
-			return Result{}, err
-		}
-		w.progress("crane digest")
-		raw, err := w.Runner.Output(ctx, s.SourceDir, "crane", "digest", "--insecure", s.HostPushRepo+":"+s.ImageTag)
-		if err != nil {
-			return Result{}, errors.New("host registry digest lookup failed")
-		}
-		digest = strings.TrimSpace(string(raw))
-	} else {
-		if err := w.run(ctx, s.SourceDir, "docker push", "docker", "push", image); err != nil {
-			return Result{}, err
-		}
-		w.progress("resolve image digest")
-		raw, err := w.Runner.Output(ctx, s.SourceDir, "docker", "image", "inspect", "--format", "{{json .RepoDigests}}", image)
-		if err != nil {
-			return Result{}, errors.New("image digest lookup failed")
-		}
-		var repoDigests []string
-		if json.Unmarshal(raw, &repoDigests) != nil {
-			return Result{}, errors.New("image digest response invalid")
-		}
-		for _, candidate := range repoDigests {
-			if strings.HasPrefix(candidate, s.ImageRepository+"@") {
-				digest = strings.TrimPrefix(candidate, s.ImageRepository+"@")
-				break
-			}
-		}
+	w.progress("resolve containerd manifest digest")
+	digest, err := w.imageDigest(ctx, s, image)
+	if err != nil {
+		return Result{}, err
 	}
-	if !digestPattern.MatchString(digest) {
-		return Result{}, errors.New("pushed image digest unavailable")
+	// K3s resolves a digest reference separately from the local build tag.
+	if err := w.run(ctx, s.SourceDir, "register local digest reference", "ctr", "images", "tag", image, s.ImageRepository+"@"+digest); err != nil {
+		return Result{}, err
 	}
-	if s.KindPrepull {
-		if err := w.prepullKind(ctx, s, image+"@"+digest); err != nil {
-			return Result{}, err
-		}
+	current, err := SourceIdentity(ctx, w.Runner, s)
+	if err != nil || current != identity {
+		return Result{}, errors.New("source/build inputs changed during build; deployment stopped")
 	}
 	values := append(valuesArgs(s.ValuesFiles), "--set-string", "image.repository="+s.ImageRepository, "--set-string", "image.tag="+s.ImageTag, "--set-string", "image.digest="+digest)
-	if s.KindPrepull {
-		values = append(values, "--set-string", "image.pullPolicy=Never")
+	if s.ChartDir == filepath.Join(s.SourceDir, "kuchdesk-agent/chart") {
+		for _, field := range []struct{ key, value string }{{"repository", s.ImageRepository}, {"tag", s.ImageTag}, {"digest", digest}} {
+			if err := chartvalues.Set(s.SourceDir, "agent", "values.local.yaml", []string{"image", field.key}, field.value); err != nil {
+				return Result{}, errors.New("cannot persist build identity in canonical Agent YAML")
+			}
+		}
+		values = valuesArgs(s.ValuesFiles)
+	}
+	if err := w.run(ctx, s.SourceDir, "helm lint", "helm", append([]string{"lint", s.ChartDir}, values...)...); err != nil {
+		return Result{}, err
 	}
 	base := []string{"--kube-context", s.KubeContext, "--namespace", s.Namespace}
 	template := append(append([]string{"template", s.Release, s.ChartDir}, base...), values...)
@@ -329,42 +318,14 @@ func (w Workflow) Apply(ctx context.Context, s Spec) (Result, error) {
 		return Result{}, err
 	}
 	upgrade := append(append([]string{"upgrade", "--install", s.Release, s.ChartDir}, base...), values...)
-	upgrade = append(upgrade, "--atomic", "--wait", "--timeout", "5m")
+	upgrade = append(upgrade, "--rollback-on-failure", "--wait", "--timeout", "5m")
 	if err := w.run(ctx, s.SourceDir, "helm upgrade", "helm", upgrade...); err != nil {
 		return Result{}, err
 	}
 	if err := w.run(ctx, s.SourceDir, "rollout status", "kubectl", "--context", s.KubeContext, "--namespace", s.Namespace, "rollout", "status", "deployment/"+s.Deployment, "--timeout=5m"); err != nil {
 		return Result{}, err
 	}
-	return Result{Image: image, Digest: digest}, nil
-}
-
-func (w Workflow) prepullKind(ctx context.Context, spec Spec, image string) error {
-	w.progress("discover KIND nodes")
-	raw, err := w.Runner.Output(ctx, spec.SourceDir, "kubectl", "--context", spec.KubeContext, "get", "nodes", "-o", "json")
-	if err != nil {
-		return errors.New("KIND node discovery failed")
-	}
-	var nodes struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(raw, &nodes) != nil || len(nodes.Items) == 0 || len(nodes.Items) > 16 {
-		return errors.New("KIND node list invalid or exceeds 16 nodes")
-	}
-	for _, node := range nodes.Items {
-		name := node.Metadata.Name
-		if !namePattern.MatchString(name) {
-			return errors.New("KIND node name invalid")
-		}
-		if err := w.ensureKindImage(ctx, spec, name, image); err != nil {
-			return err
-		}
-	}
-	return nil
+	return Result{Image: image, Digest: digest, SourceCommit: identity.SourceCommit, InputHash: identity.InputHash, Platform: s.Platform}, nil
 }
 
 func valuesArgs(files []string) []string {

@@ -21,8 +21,8 @@
         "failed": {"type": "integer", "minimum": 0}
       }
     },
-    "checks": {"type": "array", "maxItems": 23, "items": {"$ref": "#/$defs/check"}},
-    "findings": {"type": "array", "maxItems": 23, "items": {"$ref": "#/$defs/finding"}},
+    "checks": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/check"}},
+    "findings": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/finding"}},
     "limitations": {"type": "array", "items": {"type": "string"}}
   },
   "$defs": {

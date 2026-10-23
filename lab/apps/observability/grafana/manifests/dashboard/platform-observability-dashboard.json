@@ -328,7 +328,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "CPU usage by Kubernetes namespace.",
+      "description": "Pod-aggregate CPU usage by Kubernetes namespace from kubelet cAdvisor.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -406,7 +406,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (namespace) (rate(container_cpu_usage_seconds_total{container!=\"\", container!=\"POD\", namespace=~\"$namespace\"}[$__rate_interval]))",
+          "expr": "sum by (namespace) (rate(container_cpu_usage_seconds_total{job=\"kubelet\", metrics_path=\"/metrics/cadvisor\", pod!=\"\", container=\"\", namespace=~\"$namespace\"}[$__rate_interval]))",
           "legendFormat": "{{namespace}}",
           "range": true,
           "refId": "A"
@@ -420,7 +420,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Container working-set memory by Kubernetes namespace.",
+      "description": "Pod-aggregate working-set memory by Kubernetes namespace from kubelet cAdvisor.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -498,7 +498,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (namespace) (container_memory_working_set_bytes{container!=\"\", container!=\"POD\", namespace=~\"$namespace\"})",
+          "expr": "sum by (namespace) (container_memory_working_set_bytes{job=\"kubelet\", metrics_path=\"/metrics/cadvisor\", pod!=\"\", container=\"\", namespace=~\"$namespace\"})",
           "legendFormat": "{{namespace}}",
           "range": true,
           "refId": "A"

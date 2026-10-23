@@ -105,7 +105,7 @@ var classificationRules = []classificationRule{
 	{
 		category: CategoryPlatformSecurity,
 		terms: []string{
-			"vault", "infisical", "cert-manager", "external-secrets", "keycloak",
+			"vault", "cert-manager", "external-secrets", "keycloak",
 			"dex", "oauth", "traefik", "ingress-nginx", "cilium", "security",
 		},
 	},

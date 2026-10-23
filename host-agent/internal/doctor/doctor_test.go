@@ -37,14 +37,17 @@ func fixture(t *testing.T) (Service, Config) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
 	t.Cleanup(server.Close)
 	commands := commandFake{errors: map[string]error{}, outputs: map[string][]byte{
-		"route -n get default":                                                                        []byte("interface: en0\npassword=LEAKED_SECRET\n"),
-		"docker info --format {{.ServerVersion}}":                                                     []byte("28.3.0\n"),
-		"kubectl --context docker-desktop get nodes -o json":                                          []byte(`{"items":[{"status":{"conditions":[{"type":"Ready","status":"True"}]},"token":"LEAKED_SECRET"}]}`),
-		"kubectl --context docker-desktop top nodes --no-headers":                                     []byte("desktop-control-plane 367m 3% 6928Mi 24%\n"),
-		"kubectl --context docker-desktop -n development-tools get deployment kuchdesk-agent -o json": []byte(`{"spec":{"replicas":1},"status":{"readyReplicas":1},"metadata":{"annotations":{"token":"LEAKED_SECRET"}}}`),
+
+		"colima --profile kuchdesk-fresh ssh -- cat /etc/machine-id":                                         []byte("fixture-machine"),
+		"colima --profile kuchdesk-fresh status":                                                             []byte("running"),
+		"route -n get default":                                                                               []byte("interface: en0\npassword=LEAKED_SECRET\n"),
+		"colima --profile kuchdesk-fresh nerdctl -- --namespace k8s.io info --format {{json .}}":             []byte(`{"Driver":"overlayfs","ServerVersion":"v2.1.3"}`),
+		"kubectl --context colima-kuchdesk-fresh get nodes -o json":                                          []byte(`{"items":[{"status":{"nodeInfo":{"kubeletVersion":"v1.35.0+k3s1","containerRuntimeVersion":"containerd://29.0.0","machineID":"fixture-machine"},"conditions":[{"type":"Ready","status":"True"}]},"token":"LEAKED_SECRET"}]}`),
+		"kubectl --context colima-kuchdesk-fresh top nodes --no-headers":                                     []byte("colima-kuchdesk-fresh 367m 3% 6928Mi 24%\n"),
+		"kubectl --context colima-kuchdesk-fresh -n development-tools get deployment kuchdesk-agent -o json": []byte(`{"spec":{"replicas":1},"status":{"readyReplicas":1},"metadata":{"annotations":{"token":"LEAKED_SECRET"}}}`),
 	}}
 	service := Service{Commands: commands, Resolver: resolverFake{addresses: []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}}, HTTP: server.Client(), DiskFree: func(string) (uint64, error) { return 5 << 30, nil }}
-	config := Config{Domain: "infisical.local.dev", KubeContext: "docker-desktop", RegistryURL: server.URL, DiskPath: t.TempDir(), Services: []Target{{Namespace: "development-tools", Deployment: "kuchdesk-agent"}}}
+	config := Config{Domain: "grafana.local.dev", KubeContext: "colima-kuchdesk-fresh", RegistryURL: server.URL, DiskPath: t.TempDir(), Services: []Target{{Namespace: "development-tools", Deployment: "kuchdesk-agent"}}}
 	return service, config
 }
 
@@ -54,10 +57,10 @@ func TestDoctorSanitizesAndStructuresChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Healthy || len(report.Findings) != 0 || report.SchemaVersion != "kuchdesk.doctor/v2" || report.Summary.Total != 8 || report.Summary.Passed != 8 || report.GeneratedAt.IsZero() {
+	if !report.Healthy || len(report.Findings) != 0 || report.SchemaVersion != "kuchdesk.doctor/v2" || report.Summary.Total != 9 || report.Summary.Passed != 9 || report.GeneratedAt.IsZero() {
 		t.Fatalf("unexpected report: %+v", report)
 	}
-	want := []string{"network", "dns", "docker", "kind", "registry", "disk", "resources", "service:development-tools/kuchdesk-agent"}
+	want := []string{"network", "dns", "colima", "containerd", "kubernetes", "disk", "resources", "registry", "service:development-tools/kuchdesk-agent"}
 	for i, id := range want {
 		if report.Checks[i].ID != id || report.Checks[i].Status != "ok" || report.Checks[i].Component == "" || report.Checks[i].Source == "" || report.Checks[i].Context == "" || report.Checks[i].ObservedAt.IsZero() {
 			t.Fatalf("check %d: %+v", i, report.Checks[i])
@@ -69,11 +72,24 @@ func TestDoctorSanitizesAndStructuresChecks(t *testing.T) {
 	}
 }
 
+func TestDoctorRejectsContextNamesPointingAtAnotherStoreOrVM(t *testing.T) {
+	for _, command := range []string{"colima --profile kuchdesk-fresh nerdctl -- --namespace k8s.io info --format {{json .}}", "colima --profile kuchdesk-fresh ssh -- cat /etc/machine-id"} {
+		service, cfg := fixture(t)
+		fake := service.Commands.(commandFake)
+		fake.outputs[command] = []byte("different-identity")
+		service.Commands = fake
+		report, err := service.Run(context.Background(), cfg)
+		if err != nil || report.Healthy {
+			t.Fatal("context name alone was accepted as runtime identity")
+		}
+	}
+}
+
 func TestDoctorReportsFailuresWithoutRawErrors(t *testing.T) {
 	service, config := fixture(t)
 	fake := service.Commands.(commandFake)
-	fake.errors["docker info --format {{.ServerVersion}}"] = errors.New("token=LEAKED_SECRET")
-	fake.outputs["kubectl --context docker-desktop get nodes -o json"] = []byte(`{"items":[{"status":{"conditions":[]}}]}`)
+	fake.errors["colima --profile kuchdesk-fresh nerdctl -- --namespace k8s.io info --format {{json .}}"] = errors.New("token=LEAKED_SECRET")
+	fake.outputs["kubectl --context colima-kuchdesk-fresh get nodes -o json"] = []byte(`{"items":[{"status":{"nodeInfo":{"kubeletVersion":"v1.35.0+k3s1","containerRuntimeVersion":"containerd://29.0.0","machineID":"fixture-machine"},"conditions":[]}}]}`)
 	service.Commands = fake
 	service.Resolver = resolverFake{err: errors.New("LEAKED_SECRET")}
 	service.DiskFree = func(string) (uint64, error) { return 1 << 30, nil }
@@ -143,13 +159,13 @@ func TestDoctorFlagsVPNDefaultRouteWithoutBlockingOtherChecks(t *testing.T) {
 func TestDoctorReportsNodePressure(t *testing.T) {
 	service, config := fixture(t)
 	fake := service.Commands.(commandFake)
-	fake.outputs["kubectl --context docker-desktop top nodes --no-headers"] = []byte("node 950m 95% 1024Mi 91%\n")
+	fake.outputs["kubectl --context colima-kuchdesk-fresh top nodes --no-headers"] = []byte("node 950m 95% 1024Mi 91%\n")
 	service.Commands = fake
 	report, err := service.Run(context.Background(), config)
 	if err != nil || report.Healthy || report.Checks[6].Status != "fail" || report.Checks[6].Evidence["maxCPUPercent"] != 95 {
 		t.Fatalf("pressure report: %+v %v", report.Checks[6], err)
 	}
-	fake.outputs["kubectl --context docker-desktop top nodes --no-headers"] = []byte("node 850m 85% 1024Mi 84%\n")
+	fake.outputs["kubectl --context colima-kuchdesk-fresh top nodes --no-headers"] = []byte("node 850m 85% 1024Mi 84%\n")
 	report, err = service.Run(context.Background(), config)
 	if err != nil || !report.Healthy || report.Checks[6].Status != "warn" {
 		t.Fatalf("warning report: %+v %v", report.Checks[6], err)
@@ -165,8 +181,8 @@ func TestRegistryProbeDoesNotFollowRedirect(t *testing.T) {
 	defer redirect.Close()
 	config.RegistryURL = redirect.URL
 	report, err := service.Run(context.Background(), config)
-	if err != nil || report.Healthy || report.Checks[4].Status != "fail" || hits.Load() != 0 {
-		t.Fatalf("redirect followed: %+v hits=%d err=%v", report.Checks[4], hits.Load(), err)
+	if err != nil || report.Healthy || report.Checks[7].Status != "fail" || hits.Load() != 0 {
+		t.Fatalf("redirect followed: %+v hits=%d err=%v", report.Checks[7], hits.Load(), err)
 	}
 }
 
@@ -191,10 +207,10 @@ func TestDoctorCanceledRunKeepsStableCompleteReport(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	report, err := service.Run(ctx, config)
-	if err != nil || report.Healthy || report.Summary.Total != 8 || report.Summary.Passed+report.Summary.Warnings+report.Summary.Failed != 8 {
+	if err != nil || report.Healthy || report.Summary.Total != 9 || report.Summary.Passed+report.Summary.Warnings+report.Summary.Failed != 9 {
 		t.Fatalf("incomplete canceled report: %+v %v", report, err)
 	}
-	want := []string{"network", "dns", "docker", "kind", "registry", "disk", "resources", "service:development-tools/kuchdesk-agent"}
+	want := []string{"network", "dns", "colima", "containerd", "kubernetes", "disk", "resources", "registry", "service:development-tools/kuchdesk-agent"}
 	for i, id := range want {
 		if report.Checks[i].ID != id || report.Checks[i].Status == "" || report.Checks[i].Source == "" {
 			t.Fatalf("check %d missing after cancellation: %+v", i, report.Checks[i])

@@ -45,13 +45,7 @@ func assertTLSName(t *testing.T, result output, namespaces []string, want string
 	if object(t, storeSpec["defaultCertificate"])["secretName"] != want {
 		t.Fatal("TLSStore does not use the selected certificate name")
 	}
-	for _, name := range []string{"grafana-values.json", "infisical-values.json"} {
-		ingress := object(t, object(t, result.overlays[name])["ingress"])
-		tls, ok := ingress["tls"].([]any)
-		if !ok || len(tls) != 1 || object(t, tls[0])["secretName"] != want {
-			t.Fatalf("%s does not use the selected certificate name", name)
-		}
-	}
+
 }
 
 func TestCurrentSiteAndFallbackCertificate(t *testing.T) {
@@ -65,11 +59,6 @@ func TestCurrentSiteAndFallbackCertificate(t *testing.T) {
 	certSpec := object(t, object(t, result.resources["10-certificate-kube-system.json"])["spec"])
 	if object(t, storeSpec["defaultCertificate"])["secretName"] != certSpec["secretName"] {
 		t.Fatal("fallback TLSStore has no matching Certificate Secret")
-	}
-	grafana := object(t, result.overlays["grafana-values.json"])
-	server := object(t, object(t, grafana["grafana.ini"])["server"])
-	if server["root_url"] != "https://grafana.local.dev" {
-		t.Fatalf("unexpected root_url: %v", server["root_url"])
 	}
 	config := object(t, object(t, result.resources["30-dns-blackbox-config.json"])["data"])["blackbox.yml"].(string)
 	if !strings.Contains(config, "query_name: grafana.local.dev") {
@@ -96,7 +85,7 @@ func TestAlternateDomainAndExistingIssuer(t *testing.T) {
 	if _, exists := certSpec["duration"]; exists {
 		t.Fatal("external issuer has an incompatible fixed duration")
 	}
-	data, err := json.Marshal([]any{result.resources, result.overlays, result.summary})
+	data, err := json.Marshal([]any{result.resources, result.summary})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +117,11 @@ func TestRerenderRemovesStaleCAResources(t *testing.T) {
 	if err := writeOutput(dir, initial); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"grafana-values.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	profile.TLS.Issuer.Type = "existing"
 	profile.TLS.Issuer.Name = "acme-dns01"
 	profile.TLS.SecretName = ""
@@ -140,6 +134,11 @@ func TestRerenderRemovesStaleCAResources(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "manifests", "00-selfsigned-issuer.json")); !os.IsNotExist(err) {
 		t.Fatalf("stale CA manifest survived rerender: %v", err)
+	}
+	for _, name := range []string{"grafana-values.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("stale chart overlay survived rerender: %s", name)
+		}
 	}
 	value, err := summaryField(dir, "secretName")
 	if err != nil {

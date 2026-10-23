@@ -1,0 +1,16 @@
+# Apply these settings to a new, dedicated Colima profile during the later deployment step.
+runtime: containerd
+portForwarder: grpc # Required for UDP; the active SSH forwarder supports TCP only.
+kubernetes:
+  enabled: true
+  version: v1.35.0+k3s1
+  k3sArgs: [] # Colima's default disables Traefik; the fresh profile needs K3s Traefik.
+network:
+  address: true
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
+mounts:
+  - location: /ABSOLUTE/PATH/TO/KUCHDESK
+    writable: false
+autoActivate: false

@@ -28,9 +28,8 @@ alloy:
         level = "info"
       }
 
-      // Receive application traces over the standard OTLP gRPC and HTTP ports.
-      // Logs continue through the Kubernetes stdout-to-Loki pipeline below.
-      otelcol.receiver.otlp "traces" {
+      // OTLP is a local development ingress; its LoadBalancer Service applies source ranges.
+      otelcol.receiver.otlp "signals" {
         grpc {
           endpoint = "0.0.0.0:4317"
         }
@@ -40,8 +39,66 @@ alloy:
         }
 
         output {
-          traces = [otelcol.processor.batch.traces.input]
+          traces  = [otelcol.processor.batch.traces.input]
+          metrics = [otelcol.processor.transform.otlp_metrics.input]
+          logs    = [otelcol.processor.attributes.otlp_logs.input]
         }
+      }
+
+      otelcol.processor.transform "otlp_metrics" {
+        error_mode = "ignore"
+
+        metric_statements {
+          context = "datapoint"
+          statements = [
+            `set(attributes["service_name"], resource.attributes["service.name"])`,
+            `set(attributes["service_namespace"], resource.attributes["service.namespace"])`,
+            `set(attributes["deployment_environment"], resource.attributes["deployment.environment"])`,
+            `set(attributes["client_mode"], resource.attributes["client.mode"])`,
+          ]
+        }
+
+        output {
+          metrics = [otelcol.processor.batch.metrics.input]
+        }
+      }
+
+      otelcol.processor.attributes "otlp_logs" {
+        action {
+          key    = "loki.resource.labels"
+          action = "insert"
+          value  = "service.name, service.namespace, deployment.environment, client.mode"
+        }
+
+        output {
+          logs = [otelcol.processor.batch.otlp_logs.input]
+        }
+      }
+
+      otelcol.processor.batch "metrics" {
+        output {
+          metrics = [otelcol.exporter.prometheus.otlp.input]
+        }
+      }
+
+      otelcol.exporter.prometheus "otlp" {
+        forward_to = [prometheus.remote_write.otlp.receiver]
+      }
+
+      prometheus.remote_write "otlp" {
+        endpoint {
+          url = "http://monitoring-kube-prometheus-prometheus.observability.svc.cluster.local:9090/api/v1/write"
+        }
+      }
+
+      otelcol.processor.batch "otlp_logs" {
+        output {
+          logs = [otelcol.exporter.loki.otlp.input]
+        }
+      }
+
+      otelcol.exporter.loki "otlp" {
+        forward_to = [loki.write.local.receiver]
       }
 
       otelcol.processor.batch "traces" {
@@ -173,3 +230,53 @@ alloy:
           url = "http://loki:3100/loki/api/v1/push"
         }
       }
+
+      // Only server-level Redis telemetry: no key patterns, values, scans, or scripts.
+      prometheus.exporter.redis "finance_server" {
+        redis_addr = "redis://redis.platform-storage.svc.cluster.local:6379"
+        redis_user = sys.env("REDIS_METRICS_USER")
+        redis_password = sys.env("REDIS_METRICS_PASSWORD")
+        export_client_list = false
+        export_client_port = false
+        export_key_values = false
+        set_client_name = false
+        connection_timeout = "5s"
+      }
+
+      prometheus.scrape "redis_native" {
+        targets = prometheus.exporter.redis.finance_server.targets
+        job_name = "redis-native"
+        scrape_interval = "30s"
+        scrape_timeout = "10s"
+        forward_to = [prometheus.remote_write.otlp.receiver]
+      }
+
+      // Scrape only the approved Finance database through its monitoring login.
+      prometheus.exporter.postgres "finance_server" {
+        data_source_names = [sys.env("POSTGRES_METRICS_URI")]
+        autodiscovery { enabled = false }
+      }
+
+      prometheus.scrape "postgresql_native" {
+        targets = prometheus.exporter.postgres.finance_server.targets
+        job_name = "postgresql-native"
+        scrape_interval = "30s"
+        scrape_timeout = "15s"
+        forward_to = [prometheus.remote_write.otlp.receiver]
+      }
+  extraEnv:
+    - name: REDIS_METRICS_USER
+      valueFrom:
+        secretKeyRef:
+          name: redis-metrics-auth
+          key: username
+    - name: REDIS_METRICS_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: redis-metrics-auth
+          key: password
+    - name: POSTGRES_METRICS_URI
+      valueFrom:
+        secretKeyRef:
+          name: postgresql-metrics-auth
+          key: uri

@@ -1,8 +1,0 @@
-{
-  "operatorNamespace": "platform-secrets",
-  "operatorServiceAccount": "infisical-opera-controller-manager",
-  "namespaceAccounts": {
-    "observability": [],
-    "platform-secrets": []
-  }
-}

@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/enrollmentcli"
 	"io"
 	"net"
 	"net/http"
@@ -21,13 +19,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/amirtaherkhani/kuchdesk/configyaml"
+	"gopkg.in/yaml.v3"
 )
 
 var portPattern = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+) -> (\d+)`)
-
-type secret struct {
-	Data map[string]string `json:"data"`
-}
 
 type apiResult struct {
 	Status       string          `json:"status"`
@@ -58,14 +55,6 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "admin-login" {
-		if err := runAdminLogin(os.Args[2:], os.Stdout, os.Stderr, enrollmentcli.Run); err != nil {
-			fmt.Fprintln(os.Stderr, "host-agent admin login failed:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	cfg, err := parseConfig(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "host-agent configuration failed:", err)
@@ -89,11 +78,14 @@ func main() {
 }
 
 func reconcile(ctx context.Context, cfg config) error {
+	if _, _, err := chartvalues.Path(cfg.ValuesRoot, "technitium", "values.local.yaml"); err != nil {
+		return errors.New("Technitium canonical private YAML is required")
+	}
 	ip, err := targetIP(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	password, err := adminPassword(ctx, cfg)
+	password, err := adminPassword(cfg)
 	if err != nil {
 		return err
 	}
@@ -115,18 +107,11 @@ func reconcile(ctx context.Context, cfg config) error {
 	return reconcileDNS(ctx, &client, cfg, ip)
 }
 
-func targetIP(ctx context.Context, cfg config) (net.IP, error) {
-	var ip net.IP
-	if cfg.TargetIP != "" {
-		ip = net.ParseIP(cfg.TargetIP).To4()
-	} else {
-		var err error
-		ip, err = lanIP(ctx, cfg.InterfaceName)
-		if err != nil {
-			return nil, err
-		}
+func targetIP(_ context.Context, cfg config) (net.IP, error) {
+	if cfg.TargetIP == "" {
+		return nil, errors.New("explicit -target-ip must name the verified Colima ingress address; the Mac LAN address is not inferred")
 	}
-	return ip, nil
+	return net.ParseIP(cfg.TargetIP).To4(), nil
 }
 
 func reconcileDNS(ctx context.Context, client *apiClient, cfg config, ip net.IP) error {
@@ -188,24 +173,19 @@ func reconcileDNS(ctx context.Context, client *apiClient, cfg config, ip net.IP)
 	return nil
 }
 
-func adminPassword(ctx context.Context, cfg config) (string, error) {
-	out, err := exec.CommandContext(ctx, cfg.Kubectl, cfg.kubectlArgs("get", "secret", cfg.AdminSecret, "-o", "json")...).Output()
+func adminPassword(cfg config) (string, error) {
+	data, _, err := chartvalues.Read(cfg.ValuesRoot, "technitium", "values.local.yaml")
 	if err != nil {
-		return "", fmt.Errorf("read Technitium Kubernetes credential: %w", err)
+		return "", errors.New("read Technitium local values: canonical private YAML unavailable")
 	}
-	var s secret
-	if err := json.Unmarshal(out, &s); err != nil {
-		return "", err
+	defer clear(data)
+	var values struct {
+		AdminPassword string `yaml:"adminPassword"`
 	}
-	encoded := s.Data[cfg.PasswordKey]
-	if encoded == "" {
-		return "", errors.New("Technitium credential key is missing")
+	if err := yaml.Unmarshal(data, &values); err != nil || values.AdminPassword == "" {
+		return "", errors.New("Technitium local password missing or invalid")
 	}
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", err
-	}
-	return string(decoded), nil
+	return values.AdminPassword, nil
 }
 
 func forwardAPI(parent context.Context, cfg config) (string, func(), error) {

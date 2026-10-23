@@ -15,6 +15,14 @@ Keep credentials out of commands, logs, and reports. Shared PostgreSQL, Redis an
 retain Finance server behavior; preserve app ENV names and keep server ENV
 separate. Fresh credentials are explicit operator decisions and Helm consumes
 Secret references only. Preserve source definitions until a verified cutover.
+Keep service YAML split by purpose, not duplicated: tracked `values.yaml` holds
+non-secret chart defaults; machine-specific or credential files stay ignored
+and mode 0600, following that service's README (`values.local.yaml` when the
+chart consumes the private overlay, or `auth.local.yaml` when credentials are
+provisioned separately as Kubernetes Secrets). Tracked examples contain only
+placeholders. Keep private files out of chart packages with `.helmignore` where
+they are in a chart directory. Do not assume every local YAML is excluded from
+Helm input; verify the documented install path.
 Measure ServiceLB source identity before changing ingress policy. Development
 SMTP may serve Mac, ordinary-container and Pod clients; keep it separate from
 its inbox API and HTTPS access. A cleared Mac port collision is not proof

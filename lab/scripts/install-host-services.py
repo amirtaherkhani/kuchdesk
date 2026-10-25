@@ -22,6 +22,22 @@ LABEL = "dev.kuchdesk.host-bridge"
 NATIVE_PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
+def stable_root():
+    if not (ROOT / ".git").is_dir() or ROOT.is_symlink():
+        raise RuntimeError("install Host services from the permanent primary checkout, not a disposable worktree")
+
+
+def bridge_project_root(values):
+    # The managed private file uses a plain absolute path. Reject ambiguous YAML
+    # rather than guessing from a file that also contains credentials.
+    lines = re.findall(r"^projectRoot:\s*([^\s#]+)\s*(?:#.*)?$", values.read_text(), re.MULTILINE)
+    if len(lines) != 1 or not Path(lines[0]).is_absolute() or Path(lines[0]).resolve() != ROOT.resolve():
+        raise RuntimeError("Bridge projectRoot must name this permanent KuchDesk checkout")
+    for relative in ("lab/scripts/service_access.py", "lab/service-access.yaml"):
+        if not (ROOT / relative).is_file():
+            raise RuntimeError("Bridge service-access source is incomplete")
+
+
 def run(args, *, directory=ROOT, environment=None, timeout=180):
     env = dict(os.environ if environment is None else environment)
     env["PATH"] = NATIVE_PATH
@@ -95,9 +111,11 @@ def check_bridge(path, binary):
 
 
 def install_bridge():
+    stable_root()
     values = ROOT / "host-agent/bridge-values.local.yaml"
     if values.is_symlink() or not values.is_file() or values.stat().st_mode & 0o777 != 0o600:
         raise RuntimeError("Bridge requires canonical regular mode-0600 bridge-values.local.yaml")
+    bridge_project_root(values)
     binary = Path.home() / ".local/bin/kuchdesk-host-bridge"
     plist = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
     check_bridge(plist, binary)
@@ -154,6 +172,7 @@ def fresh_cluster():
 
 
 def install_dns_agent():
+    stable_root()
     module, status = fresh_cluster()
     try:
         address = ipaddress.ip_address(status["ip_address"])
@@ -175,14 +194,12 @@ def install_dns_agent():
     environment.update({
         "PATH": NATIVE_PATH,
         "KUCHDESK_HOST_AGENT_KUBE_CONTEXT": module.CONTEXT,
-        "KUCHDESK_HOST_AGENT_TARGET_IP": str(address),
+        "KUCHDESK_HOST_AGENT_TARGET_IP": "auto",
         "KUCHDESK_HOST_AGENT_ZONE": zone,
-        "KUCHDESK_HOST_AGENT_LOG_DIR": str(STATE / "logs"),
+        "KUCHDESK_HOST_AGENT_LOG_DIR": str(Path.home() / "Library/Logs/KuchDesk/host-agent"),
     })
-    if endpoint := os.environ.get("KUCHDESK_HOST_AGENT_KUBE_API_SERVER"):
-        environment["KUCHDESK_HOST_AGENT_KUBE_API_SERVER"] = endpoint
     run(["bash", str(ROOT / "host-agent/install-macos.sh")], environment=environment, timeout=600)
-    print("Installed DNS Host Agent for the verified fresh Colima context/IP.", flush=True)
+    print("Installed DNS Host Agent for the verified Colima context with per-run target discovery.", flush=True)
 
 
 def codex_config_path():
@@ -217,6 +234,7 @@ def unrelated_config(config, names):
 
 
 def install_mcp():
+    stable_root()
     before = read_codex_config()
     servers = before.get("mcp_servers", {})
     expected = {

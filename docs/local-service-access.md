@@ -289,9 +289,11 @@ catalog entries; they are not arbitrary network-probe URLs. A Pod cannot inspect
 Mac files/listeners; the existing Host Bridge supplies host observations.
 
 The Host DNS Agent remains RunAtLoad + StartInterval scheduled one-shot, no
-KeepAlive. The verified launchd correction uses
-`KUCHDESK_HOST_AGENT_KUBE_API_SERVER=https://127.0.0.1:<verified-API-port>`
-(installed56076) for its own kubectl calls, with normal certificate verification.
+KeepAlive. The managed job uses `-target-ip auto`: each run resolves the
+selected Colima ingress address and derives the Lima loopback API port from
+the matching kubeconfig endpoint, with normal certificate verification.
+If Colima is stopped or the endpoint mismatches, that run fails closed and
+the next scheduled run retries. No old VM address or port is pinned.
 It changes neither shared kubeconfig nor credentials. Real launchd reconciliation
 and later scheduled runs passed; interactive kubectl alone would not prove this.
 The separate Host Bridge intentionally retains KeepAlive.

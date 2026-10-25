@@ -62,6 +62,13 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
+	if cfg.TargetIP == "auto" {
+		cfg, err = resolveColimaTarget(ctx, cfg, nativeCommand)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "host-agent Colima target check failed:", err)
+			os.Exit(1)
+		}
+	}
 	if cfg.CheckTarget {
 		ip, err := targetIP(ctx, cfg)
 		if err != nil {

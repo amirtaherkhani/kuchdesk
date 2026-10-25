@@ -35,7 +35,7 @@ func parseConfig(args []string) (config, error) {
 		flags.PrintDefaults()
 	}
 	flags.BoolVar(&cfg.CheckTarget, "check-target", false, "validate and print the explicit DNS target without changing Technitium")
-	flags.StringVar(&cfg.TargetIP, "target-ip", "", "verified Colima ingress IPv4 address; required for reconciliation")
+	flags.StringVar(&cfg.TargetIP, "target-ip", "", "verified Colima ingress IPv4 address, or auto to resolve the selected profile on every run")
 	flags.StringVar(&cfg.Zone, "zone", "", "DNS zone to reconcile, for example local.dev")
 	flags.StringVar(&cfg.KubeContext, "kube-context", "", "Kubernetes context containing Technitium")
 	flags.StringVar(&cfg.KubeAPIServer, "kube-api-server", "", "optional verified HTTPS loopback Kubernetes API endpoint; normal certificate verification remains enabled")
@@ -63,11 +63,14 @@ func parseConfig(args []string) (config, error) {
 	if _, err := localruntime.Profile(cfg.KubeContext); err != nil {
 		return config{}, err
 	}
-	if cfg.TargetIP != "" {
+	if cfg.TargetIP != "" && cfg.TargetIP != "auto" {
 		ip := net.ParseIP(cfg.TargetIP)
 		if ip == nil || ip.To4() == nil || (!ip.IsGlobalUnicast() && !ip.IsLoopback()) {
 			return config{}, fmt.Errorf("-target-ip must be a usable IPv4 address")
 		}
+	}
+	if cfg.TargetIP == "auto" && cfg.KubeAPIServer != "" {
+		return config{}, fmt.Errorf("-kube-api-server cannot be pinned when -target-ip is auto")
 	}
 	if !validDNSName(cfg.Namespace) || strings.Contains(cfg.Namespace, ".") ||
 		!validDNSName(cfg.Service) || strings.Contains(cfg.Service, ".") {

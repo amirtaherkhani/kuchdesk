@@ -44,6 +44,10 @@ label="dev.kuchdesk.host-agent"
 plist="${agent_dir}/${label}.plist"
 bin="${bin_dir}/kuchdesk-host-agent"
 
+if [[ -L "${log_dir}" || -L "$(dirname "${log_dir}")" ]]; then
+  echo "Refusing a symlinked Host Agent log directory." >&2
+  exit 1
+fi
 mkdir -p "${bin_dir}" "${agent_dir}" "${log_dir}"
 chmod 0700 "${log_dir}"
 for log in "${log_dir}/host-agent.log" "${log_dir}/host-agent.error.log"; do
@@ -115,4 +119,4 @@ fi
 mv "${bin}.new" "${bin}"
 mv "${plist}.new" "${plist}"
 launchctl bootstrap "gui/$(id -u)" "${plist}"
-echo "Installed ${label}; reconciles the configured Colima ingress address every ${interval} seconds."
+echo "Installed ${label}; reconciles the selected Colima ingress address every ${interval} seconds."

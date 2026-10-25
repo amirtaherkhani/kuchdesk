@@ -31,10 +31,14 @@ class HostInstallationSafetyTests(unittest.TestCase):
     def test_bridge_plist_has_keepalive_private_logs_and_no_token_environment(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            (root / ".git").mkdir()
             values = root / "host-agent/bridge-values.local.yaml"
             values.parent.mkdir()
-            values.write_text("synthetic: private-fixture\n")
+            values.write_text(f"projectRoot: {root}\n")
             values.chmod(0o600)
+            (root / "lab/scripts").mkdir(parents=True)
+            (root / "lab/scripts/service_access.py").touch()
+            (root / "lab/service-access.yaml").touch()
             state = root / ".kuchdesk"
             logs = state / "logs"
             logs.mkdir(parents=True)
@@ -73,7 +77,7 @@ class HostInstallationSafetyTests(unittest.TestCase):
 
     def test_conflicting_mcp_is_preserved_before_build_or_registration(self):
         config = {"mcp_servers": {"kuchdesk": {"command": "/unrelated/server"}}}
-        with mock.patch.object(installer, "read_codex_config", return_value=config), mock.patch.object(installer, "build") as build, \
+        with mock.patch.object(installer, "stable_root"), mock.patch.object(installer, "read_codex_config", return_value=config), mock.patch.object(installer, "build") as build, \
                 mock.patch.object(installer, "run") as execute, self.assertRaisesRegex(RuntimeError, "conflicts"):
             installer.install_mcp()
         build.assert_not_called()
@@ -82,6 +86,7 @@ class HostInstallationSafetyTests(unittest.TestCase):
     def test_mcp_replaces_only_retired_command_and_preserves_shared_connector(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            (root / ".git").mkdir()
             state = root / ".kuchdesk"
             state.mkdir()
             binary = state / "kuchdesk-mcp"
@@ -118,6 +123,7 @@ class HostInstallationSafetyTests(unittest.TestCase):
     def test_dns_installer_uses_verified_ip_context_and_canonical_zone(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            (root / ".git").mkdir()
             (root / "lab").mkdir()
             (root / "lab/site.json").write_text('{"domain":"synthetic.test"}')
             with mock.patch.multiple(installer, ROOT=root, STATE=root / ".kuchdesk"), mock.patch.object(Path, "home", return_value=root), \
@@ -126,9 +132,22 @@ class HostInstallationSafetyTests(unittest.TestCase):
                 installer.install_dns_agent()
             environment = execute.call_args.kwargs["environment"]
             self.assertEqual(environment["KUCHDESK_HOST_AGENT_KUBE_CONTEXT"], "colima-kuchdesk-fresh")
-            self.assertEqual(environment["KUCHDESK_HOST_AGENT_TARGET_IP"], "192.0.2.10")
+            self.assertEqual(environment["KUCHDESK_HOST_AGENT_TARGET_IP"], "auto")
             self.assertEqual(environment["KUCHDESK_HOST_AGENT_ZONE"], "synthetic.test")
+            self.assertEqual(environment["KUCHDESK_HOST_AGENT_LOG_DIR"], str(root / "Library/Logs/KuchDesk/host-agent"))
             self.assertNotIn("KUCHDESK_HOST_AGENT_NAMESPACE", environment)
+
+    def test_bridge_rejects_stale_worktree_before_touching_services(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / ".git").mkdir()
+            values = root / "host-agent/bridge-values.local.yaml"
+            values.parent.mkdir()
+            values.write_text("projectRoot: /old/disposable/worktree\n")
+            values.chmod(0o600)
+            with mock.patch.multiple(installer, ROOT=root, STATE=root / ".kuchdesk"), mock.patch.object(installer, "build") as build, self.assertRaisesRegex(RuntimeError, "permanent KuchDesk checkout"):
+                installer.install_bridge()
+            build.assert_not_called()
 
 
 if __name__ == "__main__":

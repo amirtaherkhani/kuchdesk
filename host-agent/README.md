@@ -23,7 +23,13 @@ Grafana, Technitium and Agent credentials stay in ignored mode-0600 `values.loca
 
 The Host Agent is a scheduled one-shot launchd job (`RunAtLoad` and `StartInterval`), not an always-running daemon. It reads Technitium's password directly from its private YAML and uses a localhost Kubernetes port-forward for the admin API. It reconciles only the configured wildcard and skips unchanged records.
 
-The target must be the verified Colima ingress address. The Mac default-route/LAN address is not inferred as the VM address. A future authorized installation requires explicit `KUCHDESK_HOST_AGENT_KUBE_CONTEXT`, `KUCHDESK_HOST_AGENT_ZONE` and `KUCHDESK_HOST_AGENT_TARGET_IP`. The installer pins the source root and kubectl path. Do not run the installer during source preparation.
+The target is the verified Colima ingress address. The Mac default-route/LAN address is never inferred as the VM address. The managed installer verifies the selected profile first, then installs `-target-ip auto`: every launchd run reads the selected Colima profile and kubeconfig, checks the API endpoint matches the VM, and uses Lima's current loopback API port. If Colima is stopped or the endpoint mismatches, that run fails without changing DNS; the next scheduled run retries. The installer pins the permanent primary checkout and kubectl path. The log directory is under `~/Library/Logs/KuchDesk/host-agent`, outside repository worktrees. Run installation from the permanent checkout after the runtime is ready:
+
+```sh
+python3 lab/scripts/install-host-services.py --bridge --dns-agent --mcp
+```
+
+Host Bridge requires `host-agent/bridge-values.local.yaml` (mode 0600) with `projectRoot` set to that same permanent checkout. Installation refuses a stale worktree path before replacing the launcher. The Bridge and certificate refresher are independent launchd jobs; no application project installs its own Host Bridge or DNS agent.
 
 ```sh
 # Later, after networking and runtime authorization:
@@ -33,7 +39,7 @@ go run ./cmd/kuchdesk-host-agent -kube-context colima-kuchdesk-fresh \
   -values-root /absolute/path/to/kuchdesk
 ```
 
-`-check-target` only validates/prints the explicitly supplied target. `-namespace`, `-service`, `-api-port`, `-ttl`, `-kubectl` and `-timeout` retain bounded controls. The chart's fixed Technitium account is `admin`. No host DNS resolver settings are changed by this CLI.
+`-check-target` validates/prints the selected target, including the current Colima address in auto mode. `-namespace`, `-service`, `-api-port`, `-ttl`, `-kubectl` and `-timeout` retain bounded controls. The chart's fixed Technitium account is `admin`. No host DNS resolver settings are changed by this CLI.
 
 ## Doctor diagnostics
 

@@ -4,5 +4,5 @@ listen: 127.0.0.1:8181 # Set the verified Colima-reachable host interface before
 tlsCert: /ABSOLUTE/PATH/TO/bridge-cert.pem
 tlsKey: /ABSOLUTE/PATH/TO/bridge-key.pem
 token: REPLACE_WITH_A_NEW_RANDOM_BEARER_AT_LEAST_32_CHARACTERS
-projectRoot: /absolute/path/to/kuchdesk/worktree
+projectRoot: /absolute/path/to/permanent/kuchdesk/checkout
 forwardingRecovery: false # Opt-in bounded recovery; inspect installed forwarder support first.

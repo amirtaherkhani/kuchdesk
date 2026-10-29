@@ -1,5 +1,6 @@
 """Offline ownership contract tests; never inspect the operator's profile."""
 import json
+import base64
 import os
 from pathlib import Path
 import shutil
@@ -100,6 +101,72 @@ class EnvironmentBindingTests(unittest.TestCase):
         self.assertFalse(plan["executable"])
         self.assertIn("legacy-state-unavailable", plan["blockers"])
         self.assertEqual(plan["legacyRoot"], "/deleted/checkout")
+
+    def legacy_fixture(self):
+        (self.state / "binding.json").unlink()
+        marker = self.profile / ".kuchdesk-managed"
+        marker.write_bytes(b"/removed/worktree\n")
+        directory = self.root / ".kuchdesk"
+        directory.mkdir(mode=0o700)
+        for name in binding.STATE_FILES:
+            path = directory / name
+            path.write_bytes(b'{"attempts":3,"receipts":{"owned":"preserved"}}\n')
+            path.chmod(0o600)
+        runtime = {"machineID": "fixture-machine", "clusterUID": "fixture-cluster"}
+        plan = binding.migration_plan(self.root, home=self.home, state_root=self.root, runtime=runtime)
+        return marker, directory, runtime, plan
+
+    def test_migrate_preserves_full_receipts_marker_evidence_and_budget(self):
+        marker, directory, runtime, plan = self.legacy_fixture()
+        with patch.object(binding, "observe_runtime", return_value=runtime):
+            data = binding.migrate(self.root, plan["requiredApproval"], home=self.home, state_root=self.root)
+        self.assertEqual(base64.b64decode(data["migration"]["legacyMarkerBase64"]), b"/removed/worktree\n")
+        self.assertEqual(json.loads(marker.read_bytes())["version"], 2)
+        for name in binding.STATE_FILES:
+            self.assertEqual((self.state / name).read_bytes(), (directory / name).read_bytes())
+            self.assertEqual((self.state / name).stat().st_mode & 0o777, 0o600)
+
+    def test_migration_rejects_changed_plan_before_ownership_writes(self):
+        marker, directory, runtime, plan = self.legacy_fixture()
+        (directory / binding.STATE_FILES[0]).write_bytes(b'{"attempts":4}')
+        with patch.object(binding, "observe_runtime", return_value=runtime):
+            with self.assertRaisesRegex(RuntimeError, "approval/evidence"):
+                binding.migrate(self.root, plan["requiredApproval"], home=self.home, state_root=self.root)
+        self.assertEqual(marker.read_bytes(), b"/removed/worktree\n")
+        self.assertFalse((self.state / "binding.json").exists())
+
+    def test_migration_rejects_destination_conflict_and_symlink(self):
+        marker, _, runtime, plan = self.legacy_fixture()
+        target = self.state / binding.STATE_FILES[0]
+        target.symlink_to(marker)
+        with patch.object(binding, "observe_runtime", return_value=runtime):
+            with self.assertRaisesRegex(RuntimeError, "private"):
+                binding.migrate(self.root, plan["requiredApproval"], home=self.home, state_root=self.root)
+        self.assertEqual(marker.read_bytes(), b"/removed/worktree\n")
+
+    def test_interrupted_migration_resumes_without_resetting_receipts(self):
+        _, directory, runtime, plan = self.legacy_fixture()
+        original = binding._atomic_private
+        calls = []
+        def interrupt(path, data, **kwargs):
+            if calls:
+                raise RuntimeError("fixture interruption")
+            calls.append(path)
+            original(path, data, **kwargs)
+        with patch.object(binding, "observe_runtime", return_value=runtime):
+            with patch.object(binding, "_atomic_private", side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, "fixture interruption"):
+                    binding.migrate(self.root, plan["requiredApproval"], home=self.home, state_root=self.root)
+            binding.migrate(self.root, plan["requiredApproval"], home=self.home, state_root=self.root)
+        for name in binding.STATE_FILES:
+            self.assertEqual((self.state / name).read_bytes(), (directory / name).read_bytes())
+
+    def test_runtime_change_does_not_commit_marker(self):
+        marker, _, runtime, plan = self.legacy_fixture()
+        with patch.object(binding, "observe_runtime", side_effect=[runtime, {**runtime, "clusterUID": "other"}]):
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                binding.migrate(self.root, plan["requiredApproval"], home=self.home, state_root=self.root)
+        self.assertEqual(marker.read_bytes(), b"/removed/worktree\n")
 
 
 if __name__ == "__main__":

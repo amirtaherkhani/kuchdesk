@@ -4,6 +4,12 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- A separate Development NATS operator identity for Finance account lifecycle
+  management and owned diagnostic cleanup; application permissions and credentials
+  remain unchanged. Provision the referenced operator Secret before upgrading NATS.
+
 ## [0.15.0] - 2026-10-29
 
 ### Changed

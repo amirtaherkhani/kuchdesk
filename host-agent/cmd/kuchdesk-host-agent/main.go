@@ -17,10 +17,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/amirtaherkhani/kuchdesk/configyaml"
+	"github.com/amirtaherkhani/kuchdesk/host-agent/internal/doctor"
 	"gopkg.in/yaml.v3"
 )
 
@@ -198,27 +200,37 @@ func adminPassword(cfg config) (string, error) {
 func forwardAPI(parent context.Context, cfg config) (string, func(), error) {
 	ctx, cancel := context.WithCancel(parent)
 	cmd := exec.CommandContext(ctx, cfg.Kubectl, cfg.kubectlArgs("port-forward", "--address", "127.0.0.1", "svc/"+cfg.Service, ":"+strconv.Itoa(cfg.APIPort))...)
-	reader, writer := io.Pipe()
-	cmd.Stdout, cmd.Stderr = writer, writer
-	if err := cmd.Start(); err != nil {
+	reader, writer, err := os.Pipe()
+	if err != nil {
 		cancel()
 		return "", nil, err
 	}
+	cmd.Stdout, cmd.Stderr = writer, writer
+	if err := cmd.Start(); err != nil {
+		cancel()
+		_ = writer.Close()
+		_ = reader.Close()
+		return "", nil, err
+	}
+	// The child owns its writer now; retaining ours would hide child exit/EOF.
+	_ = writer.Close()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
 	lines := make(chan string, 8)
 	go func() {
 		scanner := bufio.NewScanner(reader)
 		for scanner.Scan() {
 			select {
 			case lines <- scanner.Text():
-			default:
-				// Port-forward emits connection lines after startup; never block its pipe.
 			case <-ctx.Done():
 				return
 			}
 		}
 		close(lines)
 	}()
-	stop := func() { cancel(); _ = cmd.Wait(); _ = writer.Close(); _ = reader.Close() }
+	var once sync.Once
+	stop := func() { once.Do(func() { cancel(); _ = reader.Close(); <-done }) }
+	lastLine := ""
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
 	for {
@@ -226,8 +238,10 @@ func forwardAPI(parent context.Context, cfg config) (string, func(), error) {
 		case line, ok := <-lines:
 			if !ok {
 				stop()
-				return "", nil, errors.New("kubectl port-forward exited")
+				excerpt, _ := doctor.NormalizeExcerpt([]byte(lastLine))
+				return "", nil, fmt.Errorf("kubectl port-forward exited: %s", excerpt)
 			}
+			lastLine = line
 			if matches := portPattern.FindStringSubmatch(line); len(matches) == 3 && matches[2] == strconv.Itoa(cfg.APIPort) {
 				return matches[1], stop, nil
 			}

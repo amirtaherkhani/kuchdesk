@@ -30,6 +30,14 @@ config:
                   - $JS.ACK.VV_FINANCE_INTERNAL_EVENTS.>
               subscribe:
                 allow: [_INBOX.>]
+          # Development operator: lifecycle management stays inside FINANCE.
+          # The API identity above deliberately keeps its existing permissions.
+          - nkey: "<< $NATS_FINANCE_OPERATOR_NKEY >>"
+            permissions:
+              publish:
+                allow: [vv.finance.>, $JS.API.>, $JS.ACK.>]
+              subscribe:
+                allow: [_INBOX.>, vv.finance.>]
 container:
   image:
     repository: nats
@@ -39,6 +47,9 @@ container:
     NATS_FINANCE_PASSWORD:
       valueFrom:
         secretKeyRef: {name: nats-auth, key: finance-password}
+    NATS_FINANCE_OPERATOR_NKEY:
+      valueFrom:
+        secretKeyRef: {name: nats-finance-operator, key: public-key}
   resources:
     requests: {cpu: 250m, memory: 256Mi}
     limits: {cpu: "1", memory: 1Gi}

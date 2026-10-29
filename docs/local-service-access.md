@@ -7,6 +7,28 @@ and KIND describe historical installations, not fresh-install prerequisites.
 Observed versions on 2026-10-19 were Colima 0.10.3, Lima 2.2.1, containerd 2.3.1
 and k3s v1.35.0+k3s1; they are evidence, not permanent version restrictions.
 
+## Existing-profile ownership migration
+
+Before activating upgraded Host components on a legacy profile, review its
+ownership using `python3 lab/scripts/environment_binding.py status`. A legacy
+checkout marker requires explicit migration; do not recreate the VM or reset
+the forwarding retry budget. After migration approval, use:
+
+```sh
+python3 lab/scripts/environment_binding.py migration-plan --runtime --state-root /absolute/permanent/kuchdesk
+python3 lab/scripts/environment_binding.py migrate --state-root /absolute/permanent/kuchdesk --approve 'approve-environment-migration <planSHA256>'
+```
+
+`--state-root` explicitly selects the verified repository holding the original
+private forwarding receipts when the old worktree is gone. Review both files
+before approval. The command rechecks their hashes, VM machine ID, cluster UID
+and profile identity under a lock. It preserves complete receipt bytes and the
+original marker bytes in binding metadata, writes mode-0600 environment state,
+and commits the new marker last. Interrupted identical plans can resume;
+changed evidence and conflicting destinations fail closed. Migration starts
+no services and changes no network configuration. Then install only the
+approved Host components from the permanent checkout.
+
 ## Service YAML and credentials
 
 Service configuration may use multiple YAML files when each has a distinct

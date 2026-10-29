@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Validate local environment ownership; plan legacy migration without changing it.
+"""Validate local environment ownership and explicitly migrate legacy bindings.
 
 The configured checkout locates code/catalogs. It is not the environment owner.
-This module deliberately offers no migration apply/enrollment operation.
+Migration preserves receipt bytes and records the original marker in the binding.
 """
 import argparse
+import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -150,7 +152,7 @@ def state_path(root, name, *, home=None):
     return Path(validate_local(root, home=home)["stateDirectory"]) / name
 
 
-def migration_plan(root, *, home=None):
+def migration_plan(root, *, home=None, state_root=None, runtime=None):
     """Inventory evidence only. No enrollment, runtime probes, or file writes.
 
     A later migration must revalidate this evidence under an exclusive lock,
@@ -165,20 +167,26 @@ def migration_plan(root, *, home=None):
     if not legacy.startswith("/") or "\n" in legacy or "\x00" in legacy:
         raise RuntimeError("migration plan requires a legacy absolute checkout marker")
     legacy_root = Path(legacy)
-    blockers = ["runtime-identity-review-required", "migration-apply-not-implemented"]
+    blockers = [] if runtime else ["runtime-identity-review-required"]
     evidence = {"markerSHA256": hashlib.sha256(marker).hexdigest(), "state": {}}
-    if not legacy_root.is_dir() or legacy_root.is_symlink():
+    source = Path(state_root) if state_root is not None else legacy_root
+    if state_root is not None:
+        repository_identity(source)
+    if not source.is_dir() or source.is_symlink():
         blockers.append("legacy-state-unavailable")
     else:
-        directory = legacy_root / ".kuchdesk"
+        directory = source / ".kuchdesk"
         if directory.exists() or directory.is_symlink():
             _directory(directory)
         for name in STATE_FILES:
             path = directory / name
             evidence["state"][name] = ({"sha256": hashlib.sha256(_read(path)).hexdigest()}
                 if path.exists() or path.is_symlink() else {"absent": True})
-    plan = {"version": 2, "status": "migration-needed", "executable": False,
+            if evidence["state"][name].get("absent"):
+                blockers.append("state-file-unavailable:" + name)
+    plan = {"version": 2, "status": "migration-needed", "executable": not blockers,
             "repository": REPOSITORY, "profile": PROFILE, "context": CONTEXT,
+            "stateSource": str(source), "runtime": runtime,
             "legacyRoot": legacy, "stateDirectory": str(state), "colimaHome": str(home),
             "profileDevice": info.st_dev, "profileInode": info.st_ino,
             "evidence": evidence, "blockers": blockers,
@@ -189,15 +197,122 @@ def migration_plan(root, *, home=None):
     return {**plan, "planSHA256": digest, "requiredApproval": "approve-environment-migration " + digest}
 
 
+def observe_runtime():
+    """Read independent VM and Kubernetes identities without starting anything."""
+    def read(args):
+        result = subprocess.run(args, capture_output=True, timeout=20)
+        if result.returncode or len(result.stdout) > 1 << 20:
+            raise RuntimeError("migration runtime observation unavailable")
+        return result.stdout.decode().strip()
+    status = json.loads(read(["colima", "--profile", PROFILE, "status", "--json"]))
+    nodes = json.loads(read(["kubectl", "--context", CONTEXT, "get", "nodes", "-o", "json"]))["items"]
+    machine = read(["colima", "--profile", PROFILE, "ssh", "--", "cat", "/etc/machine-id"])
+    namespace = json.loads(read(["kubectl", "--context", CONTEXT, "get", "namespace", "kube-system", "-o", "json"]))
+    if status.get("runtime") != "containerd" or len(nodes) != 1:
+        raise RuntimeError("migration requires the selected single-node containerd profile")
+    info = nodes[0]["status"]["nodeInfo"]
+    ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                for c in nodes[0]["status"].get("conditions", []))
+    if (not machine or info["machineID"] != machine or not ready or
+            not info["containerRuntimeVersion"].startswith("containerd://") or
+            "+k3s" not in info["kubeletVersion"]):
+        raise RuntimeError("migration VM/cluster identity or readiness mismatch")
+    return {"machineID": machine, "clusterUID": namespace["metadata"]["uid"]}
+
+
+def _atomic_private(path, data, *, replace=False):
+    if path.exists() or path.is_symlink():
+        if _read(path, legacy=replace) == data:
+            return
+        if not replace:
+            raise RuntimeError("migration destination conflicts; preserved")
+    temporary = path.with_name(path.name + ".migrate-new")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def migrate(root, approval, *, home=None, state_root=None):
+    """Commit the marker last; interrupted identical plans can safely resume."""
+    home, profile, state, _ = _paths(home)
+    state.parent.mkdir(mode=0o700, exist_ok=True)
+    _directory(state.parent, private=True)
+    lock = state.parent / (PROFILE + ".migration.lock")
+    descriptor = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "rb") as stream:
+        _read(lock)
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("another environment migration is running") from None
+        plan = migration_plan(root, home=home, state_root=state_root, runtime=observe_runtime())
+        if not plan["executable"] or approval != plan["requiredApproval"]:
+            raise RuntimeError("migration approval/evidence mismatch; no ownership changes")
+        marker_path = profile / ".kuchdesk-managed"
+        marker = _read(marker_path, legacy=True)
+        receipts = {}
+        for name in STATE_FILES:
+            raw = _read(Path(plan["stateSource"]) / ".kuchdesk" / name)
+            if hashlib.sha256(raw).hexdigest() != plan["evidence"]["state"][name]["sha256"]:
+                raise RuntimeError("migration source changed; preserved")
+            if not isinstance(json.loads(raw), dict):
+                raise RuntimeError("migration receipt JSON invalid")
+            receipts[name] = raw
+        if hashlib.sha256(marker).hexdigest() != plan["evidence"]["markerSHA256"]:
+            raise RuntimeError("migration marker changed; preserved")
+        state.mkdir(mode=0o700, exist_ok=True)
+        _directory(state, private=True)
+        allowed = {*STATE_FILES, "binding.json"}
+        if any(p.name not in allowed for p in state.iterdir()):
+            raise RuntimeError("migration state directory contains unrelated files")
+        identity = str(uuid.uuid5(uuid.NAMESPACE_URL, plan["planSHA256"]))
+        binding = {key: plan[key] for key in ("version", "repository", "profile", "context", "colimaHome", "profileDevice", "profileInode")}
+        binding.update(plan["runtime"])
+        binding.update({"environmentId": identity, "migration": {
+            "planSHA256": plan["planSHA256"], "stateSource": plan["stateSource"],
+            "legacyMarkerBase64": base64.b64encode(marker).decode()}})
+        encode = lambda value: (json.dumps(value, sort_keys=True) + "\n").encode()
+        # Precheck all destinations before writing any receipt or binding.
+        contents = {**receipts, "binding.json": encode(binding)}
+        for name, data in contents.items():
+            target = state / name
+            if (target.exists() or target.is_symlink()) and _read(target) != data:
+                raise RuntimeError("migration destination conflicts; preserved")
+        for name, data in contents.items():
+            _atomic_private(state / name, data)
+        # Runtime and marker must still identify the reviewed environment.
+        if observe_runtime() != plan["runtime"] or _read(marker_path, legacy=True) != marker:
+            raise RuntimeError("migration identity changed before commit; marker preserved")
+        _atomic_private(marker_path, encode({"version": 2, "environmentId": identity}), replace=True)
+        return validate_local(root, home=home)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("status", "state-path", "migration-plan"))
+    parser.add_argument("action", choices=("status", "state-path", "migration-plan", "migrate"))
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--state-file", choices=STATE_FILES)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--runtime", action="store_true")
+    parser.add_argument("--approve")
     args = parser.parse_args()
     try:
         if args.action == "migration-plan":
-            result = migration_plan(args.root)
+            result = migration_plan(args.root, state_root=args.state_root,
+                                    runtime=observe_runtime() if args.runtime else None)
+        elif args.action == "migrate":
+            result = migrate(args.root, args.approve, state_root=args.state_root)
         elif args.action == "state-path":
             if args.state_file is None:
                 raise RuntimeError("state-path requires --state-file")

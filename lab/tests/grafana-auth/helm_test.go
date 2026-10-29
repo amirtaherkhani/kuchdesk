@@ -105,7 +105,8 @@ func TestProjectDashboardsKeepOnePlatformDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err, string(out))
 	}
-	if strings.Count(string(out), "grafana_folder: /tmp/dashboards/Platform") != 2 {
+	// All five tracked dashboard ConfigMaps must use the same absolute folder.
+	if strings.Count(string(out), "grafana_folder: /tmp/dashboards/Platform") != 5 {
 		t.Fatal("relative annotation would nest Platform twice after changing the default sidecar directory")
 	}
 }

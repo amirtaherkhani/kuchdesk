@@ -4,6 +4,28 @@ All notable KuchDesk changes are documented in this file.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-29
+
+### Changed
+
+- Bind local environment ownership and forwarding recovery state to stable
+  profile and runtime identities rather than a removable source checkout.
+- Keep installed Host DNS and Bridge launchers anchored to the permanent
+  checkout and verify the current Colima API endpoint on each run.
+- Clarify tracked service defaults and private credential YAML consumption.
+
+### Fixed
+
+- Preserve forwarding retry budgets after successful saves and reject mismatched
+  profile, repository, runtime, and forwarding-process identities.
+
+### Migration
+
+- Existing checkout-path ownership markers require an explicitly reviewed v2
+  binding migration. The source provides a read-only migration plan; automatic
+  enrollment and migration apply are intentionally unavailable. Preserve the
+  original marker and recovery-state files until activation is approved.
+
 ## [0.14.0] - 2026-10-23
 
 ### Added
@@ -430,7 +452,8 @@ All notable KuchDesk changes are documented in this file.
 [0.8.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.7.0...v0.8.0
 [0.9.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.8.0...v0.9.0
 [0.10.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.9.0...v0.10.0
-[Unreleased]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.14.0...main
+[Unreleased]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.15.0...main
+[0.15.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/amirtaherkhani/kuchdesk/compare/v0.12.0...v0.13.0

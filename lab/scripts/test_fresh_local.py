@@ -73,16 +73,16 @@ class FreshLocalSafetyTests(unittest.TestCase):
                 return b"expected\n"
             raise AssertionError("unexpected command")
 
-        with mock.patch.object(fresh, "run", side_effect=run), self.assertRaisesRegex(RuntimeError, "identity/runtime mismatch"):
+        with mock.patch.object(fresh.environment_binding, "validate_local", return_value={}), mock.patch.object(fresh, "run", side_effect=run), self.assertRaisesRegex(RuntimeError, "identity/runtime mismatch"):
             fresh.verify_cluster()
 
     def test_verify_rejects_runtime_mismatch(self):
-        with mock.patch.object(fresh, "run", return_value=b'{"runtime":"docker"}'), self.assertRaisesRegex(RuntimeError, "not running containerd"):
+        with mock.patch.object(fresh.environment_binding, "validate_local", return_value={}), mock.patch.object(fresh, "run", return_value=b'{"runtime":"docker"}'), self.assertRaisesRegex(RuntimeError, "not running containerd"):
             fresh.verify_cluster()
 
     def test_start_preserves_unowned_profile(self):
         with tempfile.TemporaryDirectory() as temp:
-            target = pathlib.Path(temp) / fresh.PROFILE
+            target = pathlib.Path(temp).resolve() / fresh.PROFILE
             target.mkdir()
             (target / "colima.yaml").write_text("private: fixture\n")
             with mock.patch.object(fresh, "profile_directory", return_value=target), mock.patch.object(fresh, "run") as execute, self.assertRaisesRegex(RuntimeError, "not owned"):
@@ -92,13 +92,14 @@ class FreshLocalSafetyTests(unittest.TestCase):
 
     def test_start_rejects_owned_profile_with_unsupported_runtime_before_startup(self):
         with tempfile.TemporaryDirectory() as temp:
-            target = pathlib.Path(temp) / fresh.PROFILE
+            target = pathlib.Path(temp).resolve() / fresh.PROFILE
             target.mkdir()
             marker = target / ".kuchdesk-managed"
             marker.write_text(str(fresh.ROOT) + "\n")
             config = target / "colima.yaml"
             config.write_text("runtime: docker\nautoActivate: false\n")
             with mock.patch.object(fresh, "profile_directory", return_value=target), \
+                 mock.patch.object(fresh.environment_binding, "validate_local", return_value={}), \
                  mock.patch.object(fresh, "run", return_value=b'{"runtime":"docker","autoActivate":false}') as execute, \
                  mock.patch.object(fresh.subprocess, "run") as process, \
                  self.assertRaisesRegex(RuntimeError, "no longer selects containerd/k3s"):
@@ -107,6 +108,13 @@ class FreshLocalSafetyTests(unittest.TestCase):
             process.assert_not_called()
             self.assertEqual(config.read_text(), "runtime: docker\nautoActivate: false\n")
             self.assertEqual(marker.read_text(), str(fresh.ROOT) + "\n")
+
+    def test_legacy_marker_blocks_start_before_any_runtime_command(self):
+        with mock.patch.object(fresh.environment_binding, "validate_local", side_effect=RuntimeError("migration-needed")), mock.patch.object(fresh, "run") as execute, mock.patch.object(fresh.subprocess, "run") as process:
+            with self.assertRaisesRegex(RuntimeError, "migration-needed"):
+                fresh.start()
+        execute.assert_not_called()
+        process.assert_not_called()
 
     def test_corrupt_cached_chart_refuses_without_download_or_mutation(self):
         with tempfile.TemporaryDirectory() as temp:

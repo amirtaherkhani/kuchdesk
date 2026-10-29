@@ -6,7 +6,21 @@ from unittest.mock import patch
 import service_access
 
 
+class RuntimeBindingTest(unittest.TestCase):
+    def test_wrong_live_cluster_is_rejected_before_forwarding(self):
+        with patch.object(service_access.environment_binding, "validate_local", return_value={
+                "machineID": "fixture-machine", "clusterUID": "expected-cluster"}), patch.object(
+                service_access, "command", side_effect=["fixture-machine", '{"metadata":{"uid":"other-cluster"}}']):
+            with self.assertRaisesRegex(RuntimeError, "runtime identity"):
+                service_access.verify_runtime_binding()
+
+
 class ServiceAccessTest(unittest.TestCase):
+    def setUp(self):
+        runtime = patch.object(service_access, "verify_runtime_binding")
+        runtime.start()
+        self.addCleanup(runtime.stop)
+
     def test_native_reservations_share_service_collision_and_loopback_validation(self):
         raw = json.loads(service_access.command(["yq", "-o=json", ".", str(service_access.CATALOG)]))
         reservation = raw["reservations"]["finance-container"]
@@ -225,11 +239,14 @@ class ServiceAccessTest(unittest.TestCase):
             if args[0] == "yq":
                 return "ssh"
             if args[0] == "kubectl":
+                if "namespace" in args:
+                    return json.dumps({"metadata": {"uid": "fixture-cluster"}})
                 return json.dumps({"items": [{"status": {"nodeInfo": {"machineID": "fixture-machine"}}}]})
             if args[-1] == "/etc/machine-id":
                 return "fixture-machine"
             return json.dumps({"runtime": "containerd", "kubernetes": True})
         with patch.object(service_access.colima_forwarding, "target"), \
+                patch.object(service_access.environment_binding, "validate_local", return_value={"machineID": "fixture-machine", "clusterUID": "fixture-cluster"}), \
                 patch.object(service_access, "command", side_effect=output), \
                 patch.object(service_access, "forwarding_active", return_value=True), \
                 patch.object(service_access, "live", return_value=({}, set(), {})), \
@@ -239,6 +256,20 @@ class ServiceAccessTest(unittest.TestCase):
             self.assertEqual(service_access.recover(entry)["state"], "conflict")
             self.assertEqual(service_access.recover(replace(entry, protocol="UDP"))["state"], "unsupported")
             run.assert_not_called()
+
+    def test_forwarding_state_uses_validated_stable_directory(self):
+        from pathlib import Path
+        target = Path("/private/environment/forwarding-ssh.json")
+        with patch.object(service_access.environment_binding, "state_path", return_value=target) as locate:
+            self.assertEqual(service_access.forward_receipts_path(), target)
+        self.assertEqual(locate.call_args.args, (service_access.ROOT, "forwarding-ssh.json"))
+
+    def test_legacy_binding_cannot_start_forward_cleanup_or_reset_state(self):
+        with patch.object(service_access.environment_binding, "state_path", side_effect=RuntimeError("migration-needed")), patch.object(service_access, "live") as live, patch.object(service_access, "save_forward_receipts") as save:
+            with self.assertRaisesRegex(RuntimeError, "migration-needed"):
+                service_access.cleanup_forwards()
+        live.assert_not_called()
+        save.assert_not_called()
 
     def test_preserves_other_helm_owner(self):
         entry = service_access.catalog()["nats"]

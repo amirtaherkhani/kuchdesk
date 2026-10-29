@@ -13,6 +13,15 @@ reconciliation under the existing Bridge lifecycle, separately from the DNS
 Agent. Installation/activation and live recovery remain pending; see the guide
 for SSH versus gRPC/UDP support and retry limits.
 
+The v2 source reconciler obtains its recovery-state path from the configured
+root's `lab/scripts/environment_binding.py state-path` helper. Local binding
+validation is required before loading or saving the persistent retry budget;
+it never falls back to an empty checkout-local budget. Python status/recovery
+uses the same stable private environment directory. The root still locates
+installed code and catalogs; this change does not install a checkout-independent
+helper. Legacy ownership fails with a migration-needed diagnostic and remains
+unchanged. See [the binding and migration contract](../docs/local-service-access.md#environment-ownership-binding-source-implementation).
+
 ## Direct YAML configuration
 
 `configyaml/` is the shared file reader/editor used by Host/MCP tools; Pods receive Helm-rendered ENV/Secrets. Its fixed catalog covers all existing chart values and the Traefik/DNS-monitoring manifests. It rejects unknown services, unsafe paths, symlink escapes and readable private files. Edits preserve unrelated keys/comments, use a cross-process nonblocking file lock and atomic replacement, and return no values. Multi-document YAML edits require a leading document index. Private/credential values are redacted from inspection.

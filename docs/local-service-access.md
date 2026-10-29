@@ -239,6 +239,68 @@ A socket send alone is not a UDP health check.
 
 ## Installation, lifecycle and recovery
 
+### Environment ownership binding (source implementation)
+
+The v2 ownership contract is independent of a checkout path. The fixed
+`kuchdesk-fresh` profile and `colima-kuchdesk-fresh` context use a private
+`<COLIMA_HOME>/_kuchdesk/kuchdesk-fresh/binding.json` (mode 0600 in directories
+of mode 0700). The profile's `.kuchdesk-managed` becomes a private JSON reference
+containing `version: 2` and its `environmentId`. The binding pins the repository
+identity, resolved Colima home, profile device/inode, VM `machineID`, and the
+`kube-system` namespace UID as `clusterUID`. Copying a profile/binding to a new
+directory does not enroll it. Owner, file type, symlink and permission checks
+fail closed.
+
+The configured root remains a locator for helper code and the catalog. Local
+Git metadata must identify its exact Git root and the expected origin
+`github.com/amirtaherkhani/kuchdesk`; a caller-supplied repository label is
+insufficient. A relocated checkout or another checkout with that verified
+origin can use the same environment binding. This does not install an independent
+helper or make an unavailable configured code/catalog root work: Host Agent
+configuration still needs a valid locator, updated separately when necessary.
+
+Read local ownership with:
+
+```sh
+python3 lab/scripts/environment_binding.py status --root /absolute/kuchdesk-checkout
+```
+
+Successful JSON includes `version`, `repository`, `environmentId`, `profile`,
+`context`, `clusterUID` and derived `stateDirectory`. It proves local ownership,
+not live runtime health. Clients must compare independent live cluster identity.
+`fresh-local.py start` validates local ownership before startup, so a stopped VM
+does not need to answer a live probe. After startup, it compares VM/cluster pins
+before seeding images. Stop and forwarding-policy operations require local
+ownership; forwarding cleanup/recovery and publication also compare live pins.
+
+A legacy plain checkout-path marker always returns `migration-needed`; it is
+never silently adopted, even when the old checkout still exists. New-profile
+enrollment and migration activation are deliberately unavailable in this source
+repair. Existing legacy profiles cannot start/stop or change forwarding through
+these revised helpers until a separately reviewed migration is implemented and
+authorized. No marker, installed helper or running environment has been migrated
+by this source change.
+
+Produce a read-only migration inventory with:
+
+```sh
+python3 lab/scripts/environment_binding.py migration-plan --root /absolute/kuchdesk-checkout
+```
+
+The plan records exact marker/state hashes, old and new locations, profile
+identity, required runtime evidence, blockers, `planSHA256` and an exact proposed
+approval string. `executable: false` is intentional: there is no apply command.
+A deleted legacy checkout blocks state inventory; absence of access is not
+evidence of an empty retry budget. Review/recover the original
+`.kuchdesk/forwarding-ssh.json` and `forwarding-recovery.json` before activation.
+A future implementation must require approval of the exact reviewed digest,
+hold an exclusive migration lock, recheck all evidence, preserve original marker
+bytes and state files, and atomically activate private binding/marker writes.
+It must copy complete SSH ownership receipts and retry/backoff counters without
+resetting them, and must not start/reconcile the VM or perform network operations.
+An interrupted activation must fail closed and remain recoverable from the
+preserved evidence. Approval of a plan alone performs no operation.
+
 For a new installation, use the canonical private Colima profile with
 `runtime: containerd`, Kubernetes enabled and `portForwarder: grpc`. First
 inventory the Lima home: the override is shared by its profiles. The installer
@@ -260,13 +322,16 @@ reconciliation, separate from read-only status calls. It validates profile/VM
 identity, catalog allocation, exact Helm owner, selector/target, readiness and
 listener ownership. It leaves conflicts untouched. After release it can restore
 an absent **TCP** mapping through the existing native Lima SSH control socket,
-even with gRPC active. A mode-0600 `.kuchdesk/forwarding-ssh.json` receipt binds
+even with gRPC active. For a v2 binding, a mode-0600
+`<stateDirectory>/forwarding-ssh.json` receipt binds
 that mapping to its publication UID, SSH master PID/start time and exact port.
 Publication removal/reallocation cancels only that recorded mapping. Never
-cancel a foreign mapping. `.kuchdesk/forwarding-recovery.json` preserves bounded
+cancel a foreign mapping. `<stateDirectory>/forwarding-recovery.json` preserves bounded
 retry/backoff state; three attempts stop an unresolved incident. New UID/removal
 or two healthy observations clear the incident. These are runtime ownership
 receipts, not another configuration store or forwarding daemon.
+Both Python helpers and the Host Bridge reconciler resolve this same validated
+directory. Legacy checkout state remains untouched pending explicit migration.
 
 One approved live TCP collision/recovery/removal cycle passed after revised Bridge
 activation. Native gRPC TCP and UDP collision retry failed independently. Do not

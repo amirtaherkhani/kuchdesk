@@ -36,6 +36,9 @@ class ColimaForwardingTest(unittest.TestCase):
         self.home_patch = patch.object(colima_forwarding, "colima_home", return_value=self.home)
         self.home_patch.start()
         self.addCleanup(self.home_patch.stop)
+        binding_patch = patch.object(colima_forwarding.environment_binding, "validate_local", return_value={})
+        binding_patch.start()
+        self.addCleanup(binding_patch.stop)
 
     def test_installs_once_with_private_permissions(self):
         with patch.object(colima_forwarding, "instances", return_value=["colima-kuchdesk-fresh"]):
@@ -48,6 +51,13 @@ class ColimaForwardingTest(unittest.TestCase):
     def test_refuses_other_profile(self):
         with patch.object(colima_forwarding, "instances", return_value=["colima-kuchdesk-fresh", "colima-other"]):
             with self.assertRaisesRegex(RuntimeError, "shared"):
+                colima_forwarding.install()
+        self.assertFalse((self.home / "_lima/_config/override.yaml").exists())
+
+    def test_legacy_ownership_refuses_override_without_mutation(self):
+        with patch.object(colima_forwarding, "instances", return_value=[]), patch.object(
+                colima_forwarding.environment_binding, "validate_local", side_effect=RuntimeError("migration-needed")):
+            with self.assertRaisesRegex(RuntimeError, "migration-needed"):
                 colima_forwarding.install()
         self.assertFalse((self.home / "_lima/_config/override.yaml").exists())
 

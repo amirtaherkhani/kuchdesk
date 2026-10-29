@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import environment_binding
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILE = "kuchdesk-fresh"
@@ -26,11 +27,7 @@ EXPECTED = {"portForwards": [
 
 
 def colima_home():
-    if value := os.environ.get("COLIMA_HOME"):
-        return Path(value).expanduser()
-    if value := os.environ.get("XDG_CONFIG_HOME"):
-        return Path(value).expanduser() / "colima"
-    return Path.home() / ".colima"
+    return environment_binding.colima_home()
 
 
 def instances(lima_home):
@@ -53,10 +50,7 @@ def target():
     names = instances(lima_home)
     if names not in ([], ["colima-" + PROFILE]):
         raise RuntimeError("Lima override is shared; expected only colima-" + PROFILE + ", found " + ", ".join(names))
-    if not (home / PROFILE / ".kuchdesk-managed").is_file():
-        raise RuntimeError("KuchDesk ownership marker is absent; override was not changed")
-    if (home / PROFILE / ".kuchdesk-managed").read_text().strip() != str(ROOT):
-        raise RuntimeError("Colima profile belongs to another checkout; override was not changed")
+    environment_binding.validate_local(ROOT, home=home)
     return lima_home / "_config/override.yaml"
 
 

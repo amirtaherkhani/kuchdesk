@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 import colima_forwarding
+import environment_binding
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTEXT = "colima-kuchdesk-fresh"
@@ -303,7 +304,13 @@ def freshness(observed_at, now=None):
     return "fresh" if 0 <= ((now or datetime.now(timezone.utc)) - observed_at).total_seconds() <= 30 else "stale"
 
 
-FORWARD_RECEIPTS = ROOT / ".kuchdesk/forwarding-ssh.json"
+# Optional test injection; production paths always come from validated ownership.
+FORWARD_RECEIPTS = None
+
+
+def forward_receipts_path():
+    return FORWARD_RECEIPTS if FORWARD_RECEIPTS is not None else environment_binding.state_path(
+        ROOT, "forwarding-ssh.json", home=colima_forwarding.colima_home())
 
 
 def ssh_master():
@@ -321,13 +328,14 @@ def ssh_master():
 
 
 def forward_receipts():
+    path = forward_receipts_path()
     try:
-        info = FORWARD_RECEIPTS.lstat()
+        info = path.lstat()
     except FileNotFoundError:
         return {}
-    if not FORWARD_RECEIPTS.is_file() or FORWARD_RECEIPTS.is_symlink() or info.st_mode & 0o777 != 0o600 or info.st_size > 65536:
+    if not path.is_file() or path.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o600 or info.st_size > 65536:
         raise ValueError("private native-forward receipts unavailable")
-    rows = json.loads(FORWARD_RECEIPTS.read_text())
+    rows = json.loads(environment_binding._read(path))
     if not isinstance(rows, dict):
         raise ValueError("invalid native-forward receipts")
     for name, row in rows.items():
@@ -338,11 +346,12 @@ def forward_receipts():
 
 def save_forward_receipts(rows):
     import tempfile
-    descriptor, path = tempfile.mkstemp(dir=FORWARD_RECEIPTS.parent, prefix=".forwarding-ssh-")
+    destination = forward_receipts_path()
+    descriptor, path = tempfile.mkstemp(dir=destination.parent, prefix=".forwarding-ssh-")
     try:
         with os.fdopen(descriptor, "w") as stream:
             json.dump(rows, stream); stream.flush(); os.fsync(stream.fileno())
-        os.replace(path, FORWARD_RECEIPTS)
+        os.replace(path, destination)
     finally:
         Path(path).unlink(missing_ok=True)
 
@@ -353,6 +362,7 @@ def cleanup_forwards():
     if not rows:
         return {"state": "unchanged", "removed": [], "blocked": []}
     colima_forwarding.target()
+    verify_runtime_binding()
     entries = catalog()
     services, _, _ = live()
     removed, blocked = [], []
@@ -383,13 +393,13 @@ def cleanup_forwards():
 
 
 def recovery_status(publication_uid, endpoint_id=None):
-    path = ROOT / ".kuchdesk/forwarding-recovery.json"
     if not publication_uid:
         return {"state": "not-applicable"}
     try:
+        path = environment_binding.state_path(ROOT, "forwarding-recovery.json", home=colima_forwarding.colima_home())
         if path.is_symlink() or path.stat().st_mode & 0o777 != 0o600:
             return {"state": "unknown"}
-        rows = json.loads(path.read_text())
+        rows = json.loads(environment_binding._read(path))
         state = rows.get(endpoint_id) if endpoint_id else next((v for v in rows.values() if v.get("uid") == publication_uid), None)
         if state is not None and state.get("uid") != publication_uid:
             state = None
@@ -402,8 +412,15 @@ def recovery_status(publication_uid, endpoint_id=None):
                 "freshness": "fresh" if datetime.now(timezone.utc).timestamp()-path.stat().st_mtime <= 90 else "stale"}
     except FileNotFoundError:
         return {"state": "not-started"}
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return {"state": "unknown"}
+
+
+def verify_runtime_binding():
+    binding = environment_binding.validate_local(ROOT, home=colima_forwarding.colima_home())
+    machine = command(["colima", "--profile", "kuchdesk-fresh", "ssh", "--", "cat", "/etc/machine-id"]).strip()
+    namespace = json.loads(command(["kubectl", "--context", CONTEXT, "get", "namespace", "kube-system", "-o", "json"]))
+    environment_binding.validate_runtime(binding, machine, namespace["metadata"]["uid"])
 
 
 def recover(entry, *, allow_grpc=False):
@@ -428,6 +445,7 @@ def recover(entry, *, allow_grpc=False):
     machine = command(["colima", "--profile", "kuchdesk-fresh", "ssh", "--", "cat", "/etc/machine-id"]).strip()
     if len(nodes) != 1 or nodes[0]["status"]["nodeInfo"]["machineID"] != machine:
         return {"state": "unknown", "reason": "Kubernetes and selected VM identities differ"}
+    verify_runtime_binding()
     services, releases, ready = live()
     ports = {}
     for (namespace, name), service in services.items():
@@ -464,12 +482,16 @@ def recover(entry, *, allow_grpc=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "status", "apply", "recover", "cleanup"))
+    parser.add_argument("action", choices=("plan", "status", "apply", "recover", "cleanup", "verify-binding"))
     parser.add_argument("--service")
     parser.add_argument("--grpc-recovery", action="store_true", help="enable verified native TCP replay under gRPC; installed worker activation is separate")
     parser.add_argument("--confirm", default="")
     args = parser.parse_args()
     try:
+        if args.action == "verify-binding":
+            verify_runtime_binding()
+            print(json.dumps({"state": "verified"}))
+            return 0
         if args.action == "cleanup":
             if args.service is not None:
                 raise ValueError("cleanup accepts only recorded native mappings")
@@ -547,6 +569,7 @@ def main():
         if args.action == "apply":
             if args.service is None or args.confirm != args.service + "/" + CONTEXT:
                 raise ValueError("apply requires one service and exact service/context confirmation")
+            verify_runtime_binding()
             entry = entries[args.service]
             if not forwarding_active():
                 raise ValueError("Lima loopback override is not active; restart approval is required before publication")

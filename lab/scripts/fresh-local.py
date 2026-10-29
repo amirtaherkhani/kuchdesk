@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 from urllib.parse import urlparse
 import colima_forwarding
+import environment_binding
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILE = "kuchdesk-fresh"
@@ -33,22 +34,15 @@ def profile_directory():
 
 def start():
     target = profile_directory()
-    marker = target / ".kuchdesk-managed"
+    # Local ownership must be valid while stopped; runtime pins are checked only
+    # after startup. Existing legacy profiles require reviewed migration.
+    environment_binding.validate_local(ROOT, home=target.parent)
     if target.exists():
-        if not marker.is_file() or marker.read_text().strip() != str(ROOT):
-            raise RuntimeError("existing Colima profile is not owned by this checkout; preserved")
         current = json.loads(run(["yq", "-o=json", ".", str(target / "colima.yaml")]))
         if current.get("runtime") != "containerd" or current.get("kubernetes", {}).get("enabled") is not True:
             raise RuntimeError("owned profile configuration no longer selects containerd/k3s; preserved without starting")
     else:
-        source = ROOT / "lab/colima-k3s.local.yaml"
-        data = json.loads(run(["yq", "-o=json", ".", str(source)]))
-        if data.get("runtime") != "containerd" or data.get("autoActivate") is not False:
-            raise RuntimeError("canonical Colima configuration must select containerd and preserve active contexts")
-        target.mkdir(mode=0o700, parents=True)
-        (target / "colima.yaml").write_bytes(source.read_bytes())
-        (target / "colima.yaml").chmod(0o600)
-        marker.write_text(str(ROOT) + "\n")
+        raise RuntimeError("explicit environment enrollment required before first startup")
     runtime = target / "containerd/config.toml"
     expected = (ROOT / "lab/containerd-k3s.toml").read_bytes()
     if runtime.exists() and runtime.read_bytes() != expected:
@@ -60,8 +54,8 @@ def start():
     result = subprocess.run(["colima", "--profile", PROFILE, "start", "--activate=false"], timeout=3600)
     if result.returncode:
         raise RuntimeError("Colima startup failed; preserve the profile and resolve the reported prerequisite before retrying")
-    seed_system_images()
     verify_cluster()
+    seed_system_images()
 
 
 def seed_system_images():
@@ -86,6 +80,7 @@ def seed_system_images():
 
 
 def verify_cluster():
+    binding = environment_binding.validate_local(ROOT, home=profile_directory().parent)
     status = json.loads(run(["colima", "--profile", PROFILE, "status", "--json"]))
     if status.get("runtime") != "containerd":
         raise RuntimeError("selected profile is not running containerd")
@@ -97,6 +92,8 @@ def verify_cluster():
     info = node["status"]["nodeInfo"]
     if info["machineID"] != machine or not info["containerRuntimeVersion"].startswith("containerd://") or "+k3s" not in info["kubeletVersion"]:
         raise RuntimeError("Kubernetes VM identity/runtime mismatch")
+    namespace = json.loads(run(["kubectl", "--context", CONTEXT, "get", "namespace", "kube-system", "-o", "json"]))
+    environment_binding.validate_runtime(binding, machine, namespace["metadata"]["uid"])
     run(["kubectl", "--context", CONTEXT, "wait", "--for=condition=Ready", "node/" + node["metadata"]["name"], "--timeout=180s"], timeout=200)
     run(["kubectl", "--context", CONTEXT, "get", "storageclass", "local-path"])
     return status
@@ -215,9 +212,7 @@ def main():
         if args.action == "start":
             start()
         elif args.action == "stop":
-            target = profile_directory() / ".kuchdesk-managed"
-            if not target.is_file() or target.read_text().strip() != str(ROOT):
-                raise RuntimeError("refusing to stop unowned profile")
+            environment_binding.validate_local(ROOT, home=profile_directory().parent)
             run(["colima", "--profile", PROFILE, "stop"], timeout=180)
         elif args.action == "charts":
             charts()

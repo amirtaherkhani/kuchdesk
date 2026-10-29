@@ -8,6 +8,22 @@
 /node_modules/
 /dist/
 /coverage/
+
+# Python bytecode, tool caches, and local virtual environments
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Go test binaries and coverage reports
+*.test
+coverage.out
+coverage.html
+
+# Project-generated artifacts
 /outputs/
 /lab/.generated/
 /lab/*.json.lock

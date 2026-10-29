@@ -43,6 +43,8 @@ site.json keeps the intended local.dev domain, grafana.local.dev host, new priva
 
 The current profile uses Colima containerd runtime plus K3s v1.35.0+k3s1 (an observed selection, not a universal version requirement), with `k3sArgs: []` so bundled Traefik remains enabled. The private profile selects 4 CPUs, 8 GiB RAM, a new 80 GiB data disk, reachable VM addressing and a scoped read-only VM build-source mount (never mounted into Pods). It contains no service credential values. Do not add old persistent-volume paths or point the profile at a previous VM. The profile name prepared for later use is `kuchdesk-fresh`; its Kubernetes context is `colima-kuchdesk-fresh`.
 
+The profile's `after-boot` provision sets `fs.inotify.max_user_instances` to 1024 before container runtimes start, and writes the same setting to `/etc/sysctl.d/99-kuchdesk-inotify.conf` for guest boot persistence. Keep this provision in the private profile when preparing a new installation. Check the live value with `colima --profile kuchdesk-fresh ssh -- cat /proc/sys/fs/inotify/max_user_instances`; a source setting alone does not prove it loaded after a restart or recreation.
+
 Before later startup, verify Colima's actual configuration root (`COLIMA_HOME`/XDG/default rules), prove this named profile is absent and install the prepared local YAML as that new profile's `colima.yaml`. An existing profile must stop the fresh-initialization procedure, not be reset or reused. These instructions describe a new installation; the current named installation is already active and must not be recreated.
 
 ```sh

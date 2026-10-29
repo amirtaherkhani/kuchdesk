@@ -1,6 +1,11 @@
 # Apply these settings to a new, dedicated Colima profile during the later deployment step.
 runtime: containerd
 portForwarder: grpc # Required for UDP; the active SSH forwarder supports TCP only.
+provision:
+  - mode: after-boot
+    script: |
+      printf 'fs.inotify.max_user_instances = 1024\n' > /etc/sysctl.d/99-kuchdesk-inotify.conf
+      sysctl -p /etc/sysctl.d/99-kuchdesk-inotify.conf
 kubernetes:
   enabled: true
   version: v1.35.0+k3s1
